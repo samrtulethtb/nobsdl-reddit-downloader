@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NoBsDL Reddit Media Downloader
 // @namespace    https://nobsdl.com/
-// @version      1.0.0
+// @version      1.0.1
 // @description  Save Reddit images, galleries and comment images straight from the page, and download Reddit videos with audio through NoBsDL. No popups, no fake buttons.
 // @author       NoBsDL
 // @icon         https://nobsdl.com/static/images/icon-192x192.png
@@ -43,7 +43,9 @@
   const IMAGE_EXTENSIONS = Object.freeze(["jpg", "jpeg", "png", "gif", "webp", "avif"]);
   const POLL_INTERVAL_MS = 1000;
   const POLL_DEADLINE_MS = 20 * 60 * 1000;
-  const SAVE_ALL_DELAY_MS = 350;
+  const POST_SELECTOR = "shreddit-post, [data-testid='post-container']";
+  const VIDEO_PLAYER_SELECTOR = "shreddit-player, shreddit-player-2, shreddit-video-player";
+  const VIDEO_BADGE_SELECTOR = ".nobsdl-reddit-badge[data-nobsdl-kind='video']";
 
   // ── Small presentation helpers ─────────────────────────────────────────
   function positiveNumber(value) {
@@ -320,6 +322,110 @@
     const room = Math.max(24, 120 - suffix.length - ext.length - 1);
     base = base.slice(0, room).trim().replace(/[.\s]+$/, "") || "reddit-image";
     return base + suffix + "." + ext;
+  }
+
+  function galleryZipFilename({title} = {}) {
+    return (cleanFilenameBase(cleanPostTitle(title)) || "reddit-gallery") + ".zip";
+  }
+
+  // ── Local ZIP writer ───────────────────────────────────────────────────
+  // Reddit galleries are saved as one browser download instead of N separate
+  // downloads (which can make the browser ask for multi-file permission).
+  // Images are already compressed, so the archive stores them without deflating
+  // and has no dependency on a ZIP library. The output is a standard ZIP with
+  // UTF-8 file names (general-purpose bit 11).
+  const CRC32_TABLE = (() => {
+    const table = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+      let c = n;
+      for (let k = 0; k < 8; k++) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+      table[n] = c >>> 0;
+    }
+    return table;
+  })();
+
+  function crc32(bytes) {
+    let c = 0xffffffff;
+    for (let i = 0; i < bytes.length; i++) c = CRC32_TABLE[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
+    return (c ^ 0xffffffff) >>> 0;
+  }
+
+  function zipDosDateTime(value) {
+    const date = value instanceof Date ? value : new Date();
+    const year = Math.max(1980, date.getFullYear());
+    return {
+      time: (date.getHours() << 11) | (date.getMinutes() << 5) | Math.floor(date.getSeconds() / 2),
+      date: ((year - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate(),
+    };
+  }
+
+  function zipArchive(files) {
+    const entries = [];
+    const chunks = [];
+    const stamp = zipDosDateTime();
+    let offset = 0;
+    for (const file of files || []) {
+      if (!file) continue;
+      const nameBytes = new TextEncoder().encode(String(file.name || "image"));
+      const data = file.bytes instanceof Uint8Array
+        ? file.bytes
+        : new Uint8Array(file.bytes || []);
+      const crc = crc32(data);
+      const local = new Uint8Array(30 + nameBytes.length);
+      const localView = new DataView(local.buffer);
+      localView.setUint32(0, 0x04034b50, true);
+      localView.setUint16(4, 20, true);
+      localView.setUint16(6, 0x0800, true);
+      localView.setUint16(8, 0, true);
+      localView.setUint16(10, stamp.time, true);
+      localView.setUint16(12, stamp.date, true);
+      localView.setUint32(14, crc, true);
+      localView.setUint32(18, data.length, true);
+      localView.setUint32(22, data.length, true);
+      localView.setUint16(26, nameBytes.length, true);
+      localView.setUint16(28, 0, true);
+      local.set(nameBytes, 30);
+      chunks.push(local, data);
+      entries.push({nameBytes, crc, size: data.length, offset});
+      offset += local.length + data.length;
+    }
+    const centralOffset = offset;
+    for (const entry of entries) {
+      const central = new Uint8Array(46 + entry.nameBytes.length);
+      const centralView = new DataView(central.buffer);
+      centralView.setUint32(0, 0x02014b50, true);
+      centralView.setUint16(4, 20, true);
+      centralView.setUint16(6, 20, true);
+      centralView.setUint16(8, 0x0800, true);
+      centralView.setUint16(10, 0, true);
+      centralView.setUint16(12, stamp.time, true);
+      centralView.setUint16(14, stamp.date, true);
+      centralView.setUint32(16, entry.crc, true);
+      centralView.setUint32(20, entry.size, true);
+      centralView.setUint32(24, entry.size, true);
+      centralView.setUint16(28, entry.nameBytes.length, true);
+      centralView.setUint16(30, 0, true);
+      centralView.setUint16(32, 0, true);
+      centralView.setUint16(34, 0, true);
+      centralView.setUint16(36, 0, true);
+      centralView.setUint32(38, 0, true);
+      centralView.setUint32(42, entry.offset, true);
+      central.set(entry.nameBytes, 46);
+      chunks.push(central);
+      offset += central.length;
+    }
+    const end = new Uint8Array(22);
+    const endView = new DataView(end.buffer);
+    endView.setUint32(0, 0x06054b50, true);
+    endView.setUint16(4, 0, true);
+    endView.setUint16(6, 0, true);
+    endView.setUint16(8, entries.length, true);
+    endView.setUint16(10, entries.length, true);
+    endView.setUint32(12, offset - centralOffset, true);
+    endView.setUint32(16, centralOffset, true);
+    endView.setUint16(20, 0, true);
+    chunks.push(end);
+    return new Blob(chunks, {type: "application/zip"});
   }
 
   // ── Formats from NoBsDL ────────────────────────────────────────────────
@@ -979,6 +1085,23 @@
   }
 
   // ── Images and galleries ───────────────────────────────────────────────
+  async function fetchImageItem(item) {
+    const candidates = [];
+    for (const candidate of [originalImageUrl(item.url), item.url]) {
+      if (candidate && !candidates.includes(candidate)) candidates.push(candidate);
+    }
+    let lastError = null;
+    for (const candidate of candidates) {
+      try {
+        return await apiBinary(candidate);
+      } catch (error) {
+        lastError = error;
+        if (error && error.code === "no_transport") break;
+      }
+    }
+    throw lastError || new Error("Couldn't save this Reddit image.");
+  }
+
   async function saveImageItem(context, item, options) {
     const settings = options || {};
     const button = settings.button || null;
@@ -989,35 +1112,24 @@
     }
     state.saving.add(key);
     setButtonBusy(button, true, "Saving…");
-    const candidates = [];
-    for (const candidate of [originalImageUrl(item.url), item.url]) {
-      if (candidate && !candidates.includes(candidate)) candidates.push(candidate);
-    }
-    let lastError = null;
     try {
-      for (const candidate of candidates) {
-        try {
-          const response = await apiBinary(candidate);
-          const filename = imageFilename({
-            title: context.title,
-            url: item.url,
-            index: item.index,
-            total: item.total,
-            contentType: response.contentType,
-          });
-          saveBlob(response.blob, filename);
-          if (!quiet) toast("Saved " + filename, "ok");
-          setButtonBusy(button, false);
-          return {ok: true, filename};
-        } catch (error) {
-          lastError = error;
-          if (error && error.code === "no_transport") break;
-        }
-      }
-      const failure = lastError || new Error("Couldn't save this Reddit image.");
-      if (!quiet) toast(failure.message, "error", {href: item.url, text: "Open image"});
+      const response = await fetchImageItem(item);
+      const filename = imageFilename({
+        title: context.title,
+        url: item.url,
+        index: item.index,
+        total: item.total,
+        contentType: response.contentType,
+      });
+      saveBlob(response.blob, filename);
+      if (!quiet) toast("Saved " + filename, "ok");
       setButtonBusy(button, false);
-      return {ok: false, error: failure};
+      return {ok: true, filename};
+    } catch (failure) {
+      const error = failure || new Error("Couldn't save this Reddit image.");
+      if (!quiet) toast(error.message, "error", {href: item.url, text: "Open image"});
+      setButtonBusy(button, false);
+      return {ok: false, error};
     } finally {
       state.saving.delete(key);
     }
@@ -1030,7 +1142,7 @@
     const saveAll = el("button", {
       class: "btn save-all",
       type: "button",
-      text: items.length === 1 ? "Save image" : "Save all",
+      text: items.length === 1 ? "Save image" : "Save all (.zip)",
     });
     const rows = [];
 
@@ -1064,30 +1176,91 @@
       if (state.galleryBusy || !items.length) return;
       state.galleryBusy = true;
       saveAll.disabled = true;
+      for (const row of rows) row.disabled = true;
       let saved = 0;
       let failed = 0;
-      for (let i = 0; i < items.length; i++) {
-        status.textContent = "Saving " + (i + 1) + " of " + items.length + "…";
-        const result = await saveImageItem(context, items[i], {button: rows[i], quiet: true});
-        if (result.ok) {
-          saved++;
-          rows[i].textContent = "Saved";
-          rows[i].disabled = true;
-        } else {
-          failed++;
-          rows[i].textContent = "Try again";
-          rows[i].disabled = false;
+      try {
+        // A one-image gallery behaves exactly like a normal single image.
+        if (items.length === 1) {
+          status.textContent = "Saving image 1 of 1…";
+          const result = await saveImageItem(context, items[0], {button: rows[0], quiet: true});
+          if (result.ok) {
+            saved = 1;
+            rows[0].textContent = "Saved";
+            rows[0].disabled = true;
+            status.textContent = "Saved " + result.filename + ".";
+            toast("Saved " + result.filename + ".", "ok");
+          } else {
+            failed = 1;
+            rows[0].textContent = "Try again";
+            rows[0].disabled = false;
+            status.textContent = result.error && result.error.message || "Couldn't save this image.";
+            toast(status.textContent, "error");
+          }
+          return;
         }
-        if (i < items.length - 1) await delay(SAVE_ALL_DELAY_MS);
-      }
-      state.galleryBusy = false;
-      saveAll.disabled = false;
-      if (failed) {
-        status.textContent = "Saved " + saved + " of " + items.length + ". " + failed + " failed.";
-        toast("Saved " + saved + " of " + items.length + " images. " + failed + " failed.", "error");
-      } else {
-        status.textContent = "Saved all " + saved + " images.";
-        toast("Saved " + saved + " image" + (saved === 1 ? "" : "s") + ".", "ok");
+
+        // Multiple pages become one local ZIP. That means one browser
+        // download, matching the single-image behavior, instead of N downloads
+        // that make the browser ask for multi-file permission.
+        const files = [];
+        for (let i = 0; i < items.length; i++) {
+          const item = items[i];
+          const key = item.key || imageKey(item.url);
+          status.textContent = "Preparing " + (i + 1) + " of " + items.length + "…";
+          if (key) {
+            if (state.saving.has(key)) {
+              failed++;
+              rows[i].textContent = "Try again";
+              rows[i].disabled = false;
+              continue;
+            }
+            state.saving.add(key);
+          }
+          try {
+            const response = await fetchImageItem(item);
+            const filename = imageFilename({
+              title: context.title,
+              url: item.url,
+              index: item.index,
+              total: item.total,
+              contentType: response.contentType,
+            });
+            files.push({name: filename, bytes: new Uint8Array(await response.blob.arrayBuffer())});
+            saved++;
+            rows[i].textContent = "Packed";
+            rows[i].disabled = true;
+          } catch (_) {
+            failed++;
+            rows[i].textContent = "Try again";
+            rows[i].disabled = false;
+          } finally {
+            if (key) state.saving.delete(key);
+          }
+        }
+
+        if (!files.length) {
+          status.textContent = "Saved 0 of " + items.length + ". " + failed + " failed.";
+          toast("No gallery images could be downloaded.", "error");
+          return;
+        }
+
+        status.textContent = "Packing " + files.length + " image" + (files.length === 1 ? "" : "s") + " into one ZIP…";
+        const zipName = galleryZipFilename({title: context.title});
+        saveBlob(zipArchive(files), zipName);
+        if (failed) {
+          status.textContent = "Saved " + saved + " of " + items.length + " images in " + zipName + ". " + failed + " failed.";
+          toast("Saved " + saved + " of " + items.length + " images in one ZIP. " + failed + " failed.", "error");
+        } else {
+          status.textContent = "Saved " + saved + " images in " + zipName + ".";
+          toast("Saved " + saved + " images in one ZIP.", "ok");
+        }
+      } catch (error) {
+        status.textContent = (error && error.message) || "Couldn't create the gallery ZIP.";
+        toast(status.textContent, "error");
+      } finally {
+        state.galleryBusy = false;
+        saveAll.disabled = false;
       }
     });
 
@@ -1097,7 +1270,7 @@
       sub: items.length + " image" + (items.length === 1 ? "" : "s") + " found in this post",
       body: [list, status, el("div", {class: "row"}, [saveAll])],
       foot: [
-        el("span", {text: "Images are saved from Reddit's image host."}),
+        el("span", {text: "Images come from Reddit's image host; galleries are packed into one ZIP."}),
         externalLink(openOnNoBsdlUrl(context.postUrl), "Open post on NoBsDL ↗", ""),
       ],
     });
@@ -1430,7 +1603,6 @@
   // ── Finding media in Reddit's DOM ──────────────────────────────────────
   // Per-post elements, not post URLs: Reddit can remove and re-render a post
   // (back/forward, feed recycling) and the new DOM must get its badge again.
-  const processedVideoPosts = new WeakSet();
   let lastHref = "";
 
   function postTitleFor(post) {
@@ -1455,14 +1627,20 @@
     };
   }
 
+  function pageMediaContainer(el) {
+    return Boolean(el && el.closest
+      && el.closest("main, [role='main'], shreddit-app, #main-content, dialog, [role='dialog'], faceplate-dialog, shreddit-media-lightbox"));
+  }
+
   function postContextFor(el, options) {
     const allowPage = !options || options.allowPage !== false;
     // A player or gallery may carry its own post-id. Prefer the surrounding
     // post's full permalink when both identify the same post; use the media
-    // post-id when it points at a different post (a crosspost).
+    // post-id when it points at a different post (a crosspost). The wider
+    // climb also covers a player moved into a lightbox/portal.
     let media = null;
     let node = el;
-    for (let depth = 0; depth < 4 && node && node.nodeType === 1; depth++, node = node.parentElement) {
+    for (let depth = 0; depth < 8 && node && node.nodeType === 1; depth++, node = node.parentElement) {
       if (node.hasAttribute && node.hasAttribute("post-id")) {
         const parsed = parseRedditPostUrl(postUrlFromId(node.getAttribute("post-id")) || "");
         if (parsed) {
@@ -1471,7 +1649,7 @@
         }
       }
     }
-    const post = el.closest && el.closest("shreddit-post, [data-testid='post-container']");
+    const post = el.closest && el.closest(POST_SELECTOR);
     if (post) {
       const permalink = post.getAttribute("permalink") || post.getAttribute("content-href") || "";
       const parsed = parseRedditPostUrl(permalink, document.baseURI);
@@ -1488,7 +1666,7 @@
     if (media) return contextForParsed(media, post);
     if (allowPage) {
       const here = parseRedditPostUrl(location.href);
-      if (here && el.closest && el.closest("main, [role='main'], shreddit-app, #main-content")) {
+      if (here && pageMediaContainer(el)) {
         return contextForParsed(here, null);
       }
     }
@@ -1530,9 +1708,9 @@
 
   function isContentImage(img, src) {
     if (!img || nearestComment(img)) return false;
-    if (img.closest("shreddit-player, shreddit-player-2")) return false;
+    if (img.closest(VIDEO_PLAYER_SELECTOR)) return false;
     if (galleryRootFor(img)) return false;
-    const post = img.closest("shreddit-post, [data-testid='post-container']");
+    const post = img.closest(POST_SELECTOR);
     if (!post) return false;
     if (img.closest("header, [slot='post-header'], shreddit-post-header, [data-testid='post-header'], faceplate-tracker[noun='subreddit_icon']")) return false;
     if (img.getAttribute("aria-hidden") === "true") return false;
@@ -1586,61 +1764,143 @@
   }
 
   function videoBadgeExists(marker) {
-    return Boolean(marker && marker.querySelector
-      && marker.querySelector(".nobsdl-reddit-badge[data-nobsdl-kind='video']"));
+    return Boolean(marker && marker.querySelector && marker.querySelector(VIDEO_BADGE_SELECTOR));
+  }
+
+  function clearStaleVideoBadges(root, postUrl) {
+    if (!root || !root.querySelectorAll) return;
+    for (const badge of root.querySelectorAll(VIDEO_BADGE_SELECTOR)) {
+      if (badge.dataset.nobsdlPost && badge.dataset.nobsdlPost !== postUrl) badge.remove();
+    }
+  }
+
+  function nodeIsVisible(node) {
+    if (!node || node.nodeType !== 1) return false;
+    const rect = node.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0 && node.getClientRects().length > 0;
+  }
+
+  function videoScopeFor(post) {
+    if (!post) return null;
+    const parent = post.parentElement;
+    if (parent && !parent.shadowRoot && parent !== document.body
+      && parent.querySelectorAll(POST_SELECTOR).length <= 1) return parent;
+    return post;
+  }
+
+  // Reddit uses different wrappers per surface: a player page has
+  // shreddit-async-loader, cards have shreddit-aspect-ratio, and compact view
+  // keeps the player in a hidden subtree. Pick the first visible container so
+  // the badge is never appended to a 0x0 host.
+  function videoHostFor(media, post) {
+    const candidates = [];
+    const aspect = media.closest && media.closest("shreddit-aspect-ratio");
+    if (aspect) candidates.push(aspect);
+    const container = media.closest && media.closest("[slot='post-media-container'], [data-testid='post-media-container']");
+    if (container) candidates.push(container);
+    if (media !== post && media.parentElement) candidates.push(media.parentElement);
+    // A shreddit-post can have its own shadow root: an unslotted light-DOM
+    // child is not rendered (0x0). Its article wrapper is the safe visible
+    // surface in compact view, but only when it belongs to this post.
+    const scope = videoScopeFor(post);
+    if (scope && scope !== post) candidates.push(scope);
+    if (post) candidates.push(post);
+    if (media) candidates.push(media);
+    for (const candidate of candidates) {
+      if (nodeIsVisible(candidate)) return candidate;
+    }
+    return post || media;
+  }
+
+  function openVideoPanel(context) {
+    openPanel({
+      kind: "video",
+      key: "v:" + context.url,
+      postUrl: context.url,
+      title: postTitleFor(context.post) || context.title,
+    });
   }
 
   function processVideo(player) {
     if (!player || nearestComment(player)) return;
+    const post = player.closest && player.closest(POST_SELECTOR);
     const context = postContextFor(player, {allowPage: true});
-    const post = player.closest && player.closest("shreddit-post, [data-testid='post-container']");
-    const marker = post || player;
-    if (!context || (processedVideoPosts.has(marker) && videoBadgeExists(marker))) return;
-    const host = player.closest("shreddit-aspect-ratio") || player.parentElement || player;
-    if (host.dataset.nobsdlReddit === "video") return;
-    const badge = addBadge(host, "⬇ Video", () => {
-      openPanel({
-        kind: "video",
-        key: "v:" + context.url,
-        postUrl: context.url,
-        title: postTitleFor(context.post) || context.title,
-      });
-    }, "video");
+    if (!context) return;
+    if (post) {
+      const scope = videoScopeFor(post);
+      clearStaleVideoBadges(scope, context.url);
+      if (videoBadgeExists(scope)) return;
+    }
+    const host = videoHostFor(player, post);
+    if (!host) return;
+    clearStaleVideoBadges(host, context.url);
+    if (videoBadgeExists(host)) return;
+    const badge = addBadge(host, "⬇ Video", () => openVideoPanel(context), "video");
     if (badge) {
+      badge.dataset.nobsdlPost = context.url;
+      if (host !== post) host.dataset.nobsdlReddit = "video";
+    }
+  }
+
+  // Compact/card feeds can keep the real player in a hidden subtree, and some
+  // video posts temporarily have no player at all. The post itself is then the
+  // visible control surface; the canonical post URL is still known.
+  function processVideoPostFallback(post) {
+    if (!post || nearestComment(post)) return;
+    if (String(post.getAttribute("post-type") || "").toLowerCase() !== "video") return;
+    // A real player/native video is handled by processVideo/processNativeVideo;
+    // this fallback exists for compact or temporarily player-less posts.
+    if (post.querySelector(VIDEO_PLAYER_SELECTOR + ", video")) return;
+    const context = postContextFor(post, {allowPage: true});
+    if (!context) return;
+    const scope = videoScopeFor(post);
+    clearStaleVideoBadges(scope, context.url);
+    if (videoBadgeExists(scope)) return;
+    const host = videoHostFor(post, post);
+    if (!host) return;
+    clearStaleVideoBadges(host, context.url);
+    if (videoBadgeExists(host)) return;
+    const badge = addBadge(host, "⬇ Video", () => openVideoPanel(context), "video");
+    if (badge) {
+      badge.dataset.nobsdlPost = context.url;
       host.dataset.nobsdlReddit = "video";
-      processedVideoPosts.add(marker);
     }
   }
 
   function processNativeVideo(video) {
-    if (!video || video.closest("shreddit-player, shreddit-player-2") || nearestComment(video)) return;
-    const post = video.closest("shreddit-post, [data-testid='post-container']");
-    if (!post) return;
-    const postType = String(post.getAttribute("post-type") || "").toLowerCase();
-    if (postType !== "video" && !video.closest("[slot='post-media-container'], [data-testid='post-media-container'], shreddit-aspect-ratio")) return;
+    if (!video || video.closest(VIDEO_PLAYER_SELECTOR) || nearestComment(video)) return;
+    const post = video.closest && video.closest(POST_SELECTOR);
+    const postType = post ? String(post.getAttribute("post-type") || "").toLowerCase() : "";
+    const mediaContainer = video.closest && video.closest(
+      "[slot='post-media-container'], [data-testid='post-media-container'], shreddit-aspect-ratio, "
+      + "dialog, [role='dialog'], faceplate-dialog, shreddit-media-lightbox"
+    );
+    if (!post && !mediaContainer) return;
+    if (post && postType !== "video"
+      && !video.closest("[slot='post-media-container'], [data-testid='post-media-container'], shreddit-aspect-ratio")) return;
     const context = postContextFor(video, {allowPage: true});
-    if (!context || (processedVideoPosts.has(post) && videoBadgeExists(post))) return;
-    const host = video.closest("shreddit-aspect-ratio") || video.parentElement || video;
-    if (host.dataset.nobsdlReddit === "video") return;
-    const badge = addBadge(host, "⬇ Video", () => {
-      openPanel({
-        kind: "video",
-        key: "v:" + context.url,
-        postUrl: context.url,
-        title: postTitleFor(context.post) || context.title,
-      });
-    }, "video");
+    if (!context) return;
+    if (post) {
+      const scope = videoScopeFor(post);
+      clearStaleVideoBadges(scope, context.url);
+      if (videoBadgeExists(scope)) return;
+    }
+    const host = videoHostFor(video, post);
+    if (!host) return;
+    clearStaleVideoBadges(host, context.url);
+    if (videoBadgeExists(host)) return;
+    const badge = addBadge(host, "⬇ Video", () => openVideoPanel(context), "video");
     if (badge) {
-      host.dataset.nobsdlReddit = "video";
-      processedVideoPosts.add(post);
+      badge.dataset.nobsdlPost = context.url;
+      if (host !== post) host.dataset.nobsdlReddit = "video";
     }
   }
 
   function processImage(img) {
     if (!img || img.dataset.nobsdlReddit === "image") return;
     if (nearestComment(img) || galleryRootFor(img)) return;
-    if (img.closest("shreddit-player, shreddit-player-2")) return;
-    const post = img.closest("shreddit-post, [data-testid='post-container']");
+    if (img.closest(VIDEO_PLAYER_SELECTOR)) return;
+    const post = img.closest(POST_SELECTOR);
     if (!post) return;
     if (String(post.getAttribute("post-type") || "").toLowerCase() === "video") return;
     const src = bestImageVariant(img.getAttribute("src"), img.getAttribute("srcset"), document.baseURI);
@@ -1700,7 +1960,7 @@
 
   function processCommentMedia(comment) {
     if (!comment) return;
-    const post = comment.closest("shreddit-post, [data-testid='post-container']");
+    const post = comment.closest(POST_SELECTOR);
     const parentTitle = postTitleFor(post);
     const title = parentTitle ? parentTitle + " comment" : "Reddit comment image";
 
@@ -1740,8 +2000,9 @@
       if (state.open && !state.busy) closePanel();
     }
     document.querySelectorAll("gallery-carousel, shreddit-gallery-carousel, [data-testid='gallery-carousel']").forEach(processGallery);
-    document.querySelectorAll("shreddit-player, shreddit-player-2").forEach(processVideo);
-    document.querySelectorAll("shreddit-post[post-type='video'] video").forEach(processNativeVideo);
+    document.querySelectorAll(VIDEO_PLAYER_SELECTOR).forEach(processVideo);
+    document.querySelectorAll("shreddit-post[post-type='video'], [data-testid='post-container'][post-type='video']").forEach(processVideoPostFallback);
+    document.querySelectorAll("shreddit-post video, [data-testid='post-container'] video").forEach(processNativeVideo);
     document.querySelectorAll("shreddit-post img, [data-testid='post-container'] img").forEach(processImage);
     document.querySelectorAll("shreddit-comment, [data-testid='comment']").forEach(processCommentMedia);
   }
@@ -1796,6 +2057,9 @@
     bestImageVariant,
     galleryItemsFromImages,
     imageFilename,
+    galleryZipFilename,
+    crc32,
+    zipArchive,
     normalizeRedditChoices,
     downloadParams,
     progressView,

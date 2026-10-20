@@ -1,6 +1,6 @@
 {
   "name": "nobsdl-reddit-userscript",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "Userscript that saves Reddit images, galleries and comment images, and downloads Reddit videos with audio through NoBsDL.",
   "license": "MIT",

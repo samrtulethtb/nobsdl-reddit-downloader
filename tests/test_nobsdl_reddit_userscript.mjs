@@ -17,6 +17,9 @@ const {
   bestImageVariant,
   galleryItemsFromImages,
   imageFilename,
+  galleryZipFilename,
+  crc32,
+  zipArchive,
   normalizeRedditChoices,
   downloadParams,
   progressView,
@@ -180,6 +183,32 @@ test("filenames are safe, readable, and extension-aware", () => {
   assert.ok(imageFilename({title: "x".repeat(400), url: "https://preview.redd.it/a.jpg"}).length <= 120);
   assert.equal(cleanPostTitle("r/pics - Merlin soaking up the sun!"), "Merlin soaking up the sun!");
   assert.equal(cleanPostTitle("Merlin soaking up the sun : r/pics"), "Merlin soaking up the sun");
+  assert.equal(galleryZipFilename({title: "r/pics - Merlin: soaking / up?"}), "Merlin soaking up.zip");
+  assert.equal(galleryZipFilename({}), "reddit-gallery.zip");
+});
+
+test("gallery ZIP is a standard single-file store archive", async () => {
+  assert.equal(crc32(new TextEncoder().encode("123456789")), 0xcbf43926);
+  const zip = zipArchive([
+    {name: "Merlin - 01.jpg", bytes: Uint8Array.from([1, 2, 3])},
+    {name: "Merlin - 02.png", bytes: Uint8Array.from([4, 5, 6, 7])},
+  ]);
+  assert.equal(zip.type, "application/zip");
+  const bytes = new Uint8Array(await zip.arrayBuffer());
+  const view = new DataView(bytes.buffer);
+  assert.equal(view.getUint32(0, true), 0x04034b50);
+  assert.equal(view.getUint16(8, true), 0); // stored, no deflate
+  assert.equal(view.getUint32(bytes.length - 22, true), 0x06054b50);
+  assert.equal(view.getUint16(bytes.length - 12, true), 2);
+  const centralOffset = view.getUint32(bytes.length - 22 + 16, true);
+  assert.equal(view.getUint32(centralOffset, true), 0x02014b50);
+  const decoded = new TextDecoder().decode(bytes);
+  assert.match(decoded, /Merlin - 01\.jpg/);
+  assert.match(decoded, /Merlin - 02\.png/);
+
+  const empty = new Uint8Array(await zipArchive([]).arrayBuffer());
+  assert.equal(empty.length, 22);
+  assert.equal(new DataView(empty.buffer).getUint32(0, true), 0x06054b50);
 });
 
 test("format normalisation keeps the API's real tiers and bitrates", () => {

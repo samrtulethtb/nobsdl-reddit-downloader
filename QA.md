@@ -84,10 +84,15 @@ Record file name, image dimensions if known, and result:
 - [ ] Save image 1. File name ends with `- 01.<ext>`; the image matches page 1.
 - [ ] Save image 2 (or another row). It is a different file and matches that
   page.
-- [ ] Click **Save all**. All N files are saved with distinct numbered names and
-  the final status says all were saved.
-- [ ] If one image fails, the status reports the real number saved and failed;
-  it does not claim success.
+- [ ] Click **Save all (.zip)**. Exactly one ZIP download is offered, named
+  after the post. The browser does not ask for permission to download multiple
+  files.
+- [ ] Open the ZIP. It contains all N files with the distinct numbered names,
+  and each image matches its page.
+- [ ] The panel status says how many images were packed and names the ZIP.
+- [ ] If one image fails, the remaining images are still packed into one ZIP
+  and the status reports the real number packed and failed; it does not claim
+  success for the failed page.
 - [ ] Network: no `nobsdl.com` request; only `i.redd.it` / `preview.redd.it`.
 
 Record the real `N`, file names, and result:
@@ -98,6 +103,13 @@ Open the video post and the panel. Use DevTools to confirm requests.
 
 - [ ] Exactly one `⬇ Video` badge appears; the native `<video>` fallback does
   not add a second one.
+- [ ] In the normal card feed, each visible video post gets a visible
+  `⬇ Video` badge.
+- [ ] In compact view (`?feedViewType=compactView`), each visible video post
+  still gets a visible badge on its post/article surface, not a 0×0 control
+  inside the hidden player.
+- [ ] If Reddit opens a player in an overlay/lightbox outside the post, the
+  player gets a badge and opening it requests that player's own post URL.
 - [ ] On opening, exactly one `/api/video-info` request is made.
 - [ ] Its `url=` is the canonical full Reddit post URL, without tracking
   parameters or a trailing slash.
@@ -208,8 +220,8 @@ Record each drill:
 
 | Field | Value |
 | --- | --- |
-| Automated unit tests | `node --test tests/test_nobsdl_reddit_userscript.mjs` → 17/17 |
-| Automated browser tests | `tests/test_nobsdl_reddit_userscript_browser.js` → 83/83 |
+| Automated unit tests | `node --test tests/test_nobsdl_reddit_userscript.mjs` → 18/18 |
+| Automated browser tests | `tests/test_nobsdl_reddit_userscript_browser.js` → 96/96 |
 | Live gallery result | |
 | Live single-image result | |
 | Live video result | |

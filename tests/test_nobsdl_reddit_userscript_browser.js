@@ -81,6 +81,38 @@ function json(route, body, status) {
   });
 }
 
+// Minimal reader for the store-only ZIP produced by the userscript. It checks
+// the central directory and returns each local entry, so the test verifies the
+// real archive rather than only the download filename.
+function readZipEntries(buffer) {
+  const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+  const end = buffer.length - 22;
+  if (view.getUint32(end, true) !== 0x06054b50) throw new Error('missing ZIP end record');
+  const count = view.getUint16(end + 10, true);
+  let offset = view.getUint32(end + 16, true);
+  const entries = [];
+  for (let i = 0; i < count; i++) {
+    if (view.getUint32(offset, true) !== 0x02014b50) throw new Error('missing ZIP central header');
+    const method = view.getUint16(offset + 10, true);
+    const size = view.getUint32(offset + 24, true);
+    const nameLength = view.getUint16(offset + 28, true);
+    const extraLength = view.getUint16(offset + 30, true);
+    const commentLength = view.getUint16(offset + 32, true);
+    const localOffset = view.getUint32(offset + 42, true);
+    if (view.getUint32(localOffset, true) !== 0x04034b50) throw new Error('missing ZIP local header');
+    const localNameLength = view.getUint16(localOffset + 26, true);
+    const localExtraLength = view.getUint16(localOffset + 28, true);
+    const dataStart = localOffset + 30 + localNameLength + localExtraLength;
+    entries.push({
+      name: buffer.subarray(offset + 46, offset + 46 + nameLength).toString('utf8'),
+      method,
+      data: buffer.subarray(dataStart, dataStart + size),
+    });
+    offset += 46 + nameLength + extraLength + commentLength;
+  }
+  return entries;
+}
+
 const shadow = (page, selector) => page.locator('#nobsdl-reddit-media').locator(selector);
 const gmRequests = (page) => page.evaluate(() => (window.__gmRequests || []).slice());
 
@@ -167,6 +199,22 @@ function videoPost() {
     + ' src="https://v.redd.it/fixture/HLSPlaylist.m3u8?x=1">'
     + '<video width="1080" height="720"></video></shreddit-player></shreddit-aspect-ratio>'
     + '</shreddit-post>';
+}
+
+function compactVideoPost() {
+  return '<article><shreddit-post permalink="/r/nobsdl_test/comments/vid1234/fixture_video_post/"'
+    + ' post-type="video" post-title="Fixture Video Post">'
+    + '<h1 slot="title">Fixture Video Post</h1>'
+    + '<div style="display:none"><shreddit-aspect-ratio><shreddit-player post-id="t3_vid1234"'
+    + ' src="https://v.redd.it/fixture/HLSPlaylist.m3u8"></shreddit-player></shreddit-aspect-ratio></div>'
+    + '</shreddit-post></article>';
+}
+
+function portalVideo() {
+  return '<div id="lightbox" style="position:relative;width:640px;height:360px">'
+    + '<shreddit-player post-id="t3_port123"'
+    + ' src="https://v.redd.it/fixture/HLSPlaylist.m3u8"></shreddit-player>'
+    + '</div>';
 }
 
 function commentPost() {
@@ -280,7 +328,7 @@ async function main() {
     check('gallery: the panel states the real page count', (await shadow(page, '.sub').textContent()) === '3 images found in this post');
     check('gallery: every page has one row', (await shadow(page, '.gallery-item').count()) === 3);
     check('gallery: rows are numbered honestly', JSON.stringify(await shadow(page, '.gallery-item .gi-meta strong').allTextContents()) === JSON.stringify(['Image 1 of 3', 'Image 2 of 3', 'Image 3 of 3']));
-    check('gallery: Save all is actually offered', (await shadow(page, '.save-all').count()) === 1 && (await shadow(page, '.save-all').textContent()) === 'Save all');
+    check('gallery: Save all is actually offered', (await shadow(page, '.save-all').count()) === 1 && (await shadow(page, '.save-all').textContent()) === 'Save all (.zip)');
     check('gallery: opening the panel sends no NoBsDL request', calls.length === 0 && (await gmRequests(page)).length === 0, calls);
 
     const downloads = [];
@@ -302,20 +350,26 @@ async function main() {
     await page.waitForFunction(() => {
       const root = document.getElementById('nobsdl-reddit-media');
       const status = root && root.shadowRoot && root.shadowRoot.querySelector('.status-line');
-      return status && status.textContent === 'Saved all 3 images.';
+      return status && status.textContent === 'Saved 3 images in Fixture Gallery Post.zip.';
     }, null, {timeout: 15000});
     await page.waitForTimeout(300);
-    check('gallery: Save all saves every page exactly once', downloads.length === 4, downloads.length);
-    const saveAllNames = downloads.slice(1).map((item) => item.suggestedFilename());
-    check('gallery: Save all uses distinct numbered filenames', JSON.stringify(saveAllNames) === JSON.stringify([
+    check('gallery: Save all produces exactly one browser download', downloads.length === 2, downloads.map((item) => item.suggestedFilename()));
+    check('gallery: Save all downloads one ZIP named after the post', downloads[1].suggestedFilename() === 'Fixture Gallery Post.zip', downloads[1].suggestedFilename());
+    const zipBytes = fs.readFileSync(await downloads[1].path());
+    const zipEntries = readZipEntries(zipBytes);
+    check('gallery: the ZIP contains every real page once', JSON.stringify(zipEntries.map((entry) => entry.name)) === JSON.stringify([
       'Fixture Gallery Post - 01.jpg',
       'Fixture Gallery Post - 02.jpg',
       'Fixture Gallery Post - 03.jpg',
-    ]), saveAllNames);
+    ]), zipEntries.map((entry) => entry.name));
+    check('gallery: the ZIP stores the real fetched bytes without inventing content',
+      zipEntries.every((entry) => entry.method === 0 && entry.data.length === 4
+        && entry.data[0] === 0xff && entry.data[1] === 0xd8 && entry.data[2] === 0xff && entry.data[3] === 0xd9),
+      zipEntries.map((entry) => ({method: entry.method, length: entry.data.length})));
     const allSent = await gmRequests(page);
     check('gallery: Save all fetches each real page from Reddit', allSent.includes('https://i.redd.it/gallerytwo.jpg')
       && allSent.includes('https://i.redd.it/gallerythree.jpg'), allSent);
-    check('gallery: the final status is honest', (await shadow(page, '.status-line').textContent()) === 'Saved all 3 images.');
+    check('gallery: the final status is honest', (await shadow(page, '.status-line').textContent()) === 'Saved 3 images in Fixture Gallery Post.zip.');
     await page.keyboard.press('Escape');
     check('gallery: Escape closes the panel', await shadow(page, '.panel').evaluate((node) => node.hidden));
     check('gallery: no page errors', errors.length === 0, errors);
@@ -387,7 +441,68 @@ async function main() {
     await context.close();
   }
 
-  // 3b. An MP3 choice has no source format id; it must use audio_bitrate and
+  // 3a. Compact/card feeds keep the player in a hidden subtree. The badge
+  // must still be visible on the post, not inside a 0x0 host.
+  {
+    const {context, page, calls, errors} = await setup(browser, {body: compactVideoPost(), api: videoApi()});
+    await page.goto(VIDEO_URL);
+    await inject(page, true);
+    const badges = page.locator('.nobsdl-reddit-badge');
+    check('video compact: one badge is added to a hidden-player post', (await badges.count()) === 1
+      && (await badges.first().textContent()) === '⬇ Video', await badges.allTextContents());
+    const box = await badges.first().boundingBox();
+    check('video compact: the badge is actually visible', Boolean(box && box.width > 0 && box.height > 0), box);
+    await badges.first().click();
+    await shadow(page, '.card').first().waitFor();
+    check('video compact: the visible badge starts the normal lookup', calls.filter((call) => call.startsWith('/api/video-info')).length === 1
+      && calls[0] === '/api/video-info?url=' + encodeURIComponent('https://www.reddit.com/r/nobsdl_test/comments/vid1234/fixture_video_post') + '&intent=mp4', calls);
+    check('video compact: no page errors', errors.length === 0, errors);
+    await context.close();
+  }
+
+  // 3a2. A post that first rendered without a player must not gain a second
+  // badge when Reddit lazy-loads the real player later.
+  {
+    const body = '<article><shreddit-post permalink="/r/nobsdl_test/comments/vid1234/fixture_video_post/"'
+      + ' post-type="video" post-title="Fixture Video Post">'
+      + '<h1 slot="title">Fixture Video Post</h1></shreddit-post></article>';
+    const {context, page, calls, errors} = await setup(browser, {body, api: videoApi()});
+    await page.goto(VIDEO_URL);
+    await inject(page, true);
+    const badges = page.locator('.nobsdl-reddit-badge');
+    check('video lazy: a player-less post gets one fallback badge', (await badges.count()) === 1
+      && (await badges.first().textContent()) === '⬇ Video', await badges.allTextContents());
+    await page.evaluate(() => {
+      document.querySelector('shreddit-post').insertAdjacentHTML('beforeend',
+        '<shreddit-aspect-ratio><shreddit-player post-id="t3_vid1234"'
+        + ' src="https://v.redd.it/fixture/HLSPlaylist.m3u8"></shreddit-player></shreddit-aspect-ratio>');
+    });
+    await page.waitForTimeout(650);
+    check('video lazy: the later player does not duplicate the badge', (await badges.count()) === 1, await badges.allTextContents());
+    await badges.first().click();
+    await shadow(page, '.card').first().waitFor();
+    check('video lazy: the single badge still starts one lookup', calls.filter((call) => call.startsWith('/api/video-info')).length === 1, calls);
+    check('video lazy: no page errors', errors.length === 0, errors);
+    await context.close();
+  }
+
+  // 3b. A player moved outside a shreddit-post (lightbox/portal) still gets a
+  // control from its own post-id, even on a feed URL.
+  {
+    const {context, page, calls, errors} = await setup(browser, {body: portalVideo(), api: videoApi()});
+    await page.goto('https://www.reddit.com/r/nobsdl_test/');
+    await inject(page, true);
+    const badges = page.locator('.nobsdl-reddit-badge');
+    check('video portal: a player outside a post gets one badge', (await badges.count()) === 1
+      && (await badges.first().textContent()) === '⬇ Video', await badges.allTextContents());
+    await badges.first().click();
+    await shadow(page, '.card').first().waitFor();
+    check('video portal: the badge uses the player post-id', calls[0] === '/api/video-info?url=' + encodeURIComponent('https://www.reddit.com/comments/port123') + '&intent=mp4', calls);
+    check('video portal: no page errors', errors.length === 0, errors);
+    await context.close();
+  }
+
+  // 3c. An MP3 choice has no source format id; it must use audio_bitrate and
   // the server's attachment name, not a fabricated MP4 name.
   {
     const api = (route, url) => {

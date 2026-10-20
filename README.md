@@ -5,7 +5,7 @@ NoBsDL control to Reddit images, galleries, videos and comment images:
 
 - **Images** are saved directly from Reddit's image hosts.
 - **Galleries** open a list of the real pages, with individual Save buttons and
-  Save all.
+  Save all (.zip).
 - **Videos** open a panel with the MP4/MP3 formats NoBsDL returns for that post,
   measured progress, and an in-page hand-off of the finished file.
 - **Comment images** get an inline Save image button next to the image or link.
@@ -16,13 +16,14 @@ It is independent of NoBsDL's all-in-one userscript
 NoBsDL's interaction promise applies to everyone: **No popups. No forced
 redirects. No fake download buttons. Just download.**
 
-> **Verification status (2026-10-19):** the script passes 17 unit tests and 83
+> **Verification status (2026-10-20):** the script passes 18 unit tests and 96
 > Chromium browser checks against synthetic Reddit DOM fixtures with mocked
-> Reddit CDN and NoBsDL responses. It has **not** yet been verified in a live,
-> logged-in Reddit session from this environment: Reddit served login/bot walls
-> and its CDN returned HTTP 403 here. The NoBsDL contract below was read from
-> the backend source and exercised through mocks, not through a live end-to-end
-> download. Use [QA.md](QA.md) before calling it production-ready.
+> Reddit CDN and NoBsDL responses. A live logged-in Reddit probe in Chrome also
+> verified visible `⬇ Video` badges on a post page, the normal card feed and
+> the compact feed (including the post-level compact fallback). That probe did
+> not run inside a userscript manager, so a live end-to-end NoBsDL video job
+> through the userscript is still a manual QA item. Use [QA.md](QA.md) before
+> calling it production-ready.
 
 ## Install
 
@@ -48,8 +49,8 @@ together so it can be installed and reviewed on its own.
 | Reddit content | What appears | What it does | Network used |
 | --- | --- | --- | --- |
 | Single image post (`shreddit-post` with a Reddit-hosted image) | `⬇ Save image` badge on the media | Saves the largest real variant discoverable in the page, preferring the original `i.redd.it` file | `i.redd.it`, then `preview.redd.it` as fallback |
-| Gallery (`gallery-carousel` with `page-N` images) | `⬇ Gallery · N` badge | Opens a panel listing every Reddit-hosted page found; Save or Save all | `i.redd.it` / `preview.redd.it` only |
-| Video post (`shreddit-player`, or a native `<video>` in a video post) | `⬇ Video` badge | Opens the NoBsDL format panel and runs the async download flow | `nobsdl.com` only after the panel is opened |
+| Gallery (`gallery-carousel` with `page-N` images) | `⬇ Gallery · N` badge | Opens a panel listing every Reddit-hosted page found; Save saves one image, Save all (.zip) downloads one local ZIP | `i.redd.it` / `preview.redd.it` only |
+| Video post (`shreddit-player`, `shreddit-player-2`, `shreddit-video-player`, or a native `<video>` in a video post) | `⬇ Video` badge | Opens the NoBsDL format panel and runs the async download flow | `nobsdl.com` only after the panel is opened |
 | Comment image (Reddit-hosted image link or embedded image in `shreddit-comment`) | Inline `⬇ Save image` button | Saves that comment image | `i.redd.it` / `preview.redd.it` only |
 
 Only still images served from `i.redd.it` or `preview.redd.it` are handled.
@@ -60,6 +61,8 @@ the script cannot invent it.
 ### File names
 
 - Image: the cleaned post title, plus ` - 01`, ` - 02`, … for galleries.
+- Gallery ZIP: the cleaned post title plus `.zip`; the numbered image names
+  above are the entries inside the archive.
 - Comment image: the page/post title plus ` comment`.
 - Extension: from the image response's `Content-Type`, then the URL, otherwise
   `.jpg`.
@@ -79,6 +82,13 @@ Nothing is sent while scrolling or scanning the page.
 2. If Reddit refuses that original (for example HTTP 404), the script retries
    the exact `preview.redd.it` URL that Reddit itself displayed.
 3. The bytes are saved as a browser download. No NoBsDL request is made.
+
+A single image or a single gallery row produces exactly one browser download.
+For a multi-image gallery, **Save all (.zip)** fetches the pages and builds one
+store-only ZIP locally (the images are already compressed), so the browser also
+receives exactly one download. This avoids the browser's separate
+multi-download permission prompt. The individual row buttons still save one
+image at a time.
 
 If Reddit returns 403, the toast reports it and offers an **Open image** link;
 there is no bypass.
@@ -176,8 +186,12 @@ for everyone, not a paid feature.
   that post. The script does not merge, transcode, probe or invent formats.
 - The script does not cancel a job. Keep the tab open until the file is handed
   to the browser.
-- Save all saves one file at a time. Some browsers may ask for permission to
-  allow multiple downloads.
+- Save all downloads one ZIP. Individual row buttons still save single files.
+  A browser setting such as Chrome's “Ask where to save each file before
+  downloading” applies to any download; the script cannot change it.
+- Video posts in compact view, or a player moved outside a `shreddit-post`,
+  use a visible post/article surface instead of a hidden player host. The
+  badge still resolves the canonical post URL before any request.
 - Crossposts use the player/gallery `post-id` when it differs from the
   enclosing post, so the media's own post is requested rather than the outer
   crosspost.
@@ -203,17 +217,19 @@ CHROME_BIN=/usr/bin/google-chrome node tests/test_nobsdl_reddit_userscript_brows
 The browser suite needs a Chromium/Chrome binary; set `CHROME_BIN` if it is not
 found automatically.
 
-Last local result (2026-10-19):
+Last local result (2026-10-20):
 
-- `tests/test_nobsdl_reddit_userscript.mjs`: **17/17 passed**
-- `tests/test_nobsdl_reddit_userscript_browser.js`: **83/83 passed**
+- `tests/test_nobsdl_reddit_userscript.mjs`: **18/18 passed**
+- `tests/test_nobsdl_reddit_userscript_browser.js`: **96/96 passed**
 - `node --check nobsdl-reddit-media.user.js`: clean
 
-The browser suite covers the single-image save, gallery individual/Save all
-with preview fallback, video format lookup/progress/close-reopen/attachment,
-the MP3 `audio_bitrate` path, comment images, duplicate prevention,
-re-rendered post elements and media hosts, SPA navigation, the no-GM fallback,
-a stale `format_unavailable` response, and crosspost post-id selection.
+The browser suite covers the single-image save, gallery individual saves, the
+one-download gallery ZIP, video format lookup/progress/close-reopen/attachment,
+a hidden-player compact post, a player outside a post/lightbox, a player that
+loads after the fallback badge, the MP3 `audio_bitrate` path, comment images,
+duplicate prevention, re-rendered post elements and media hosts, SPA navigation,
+the no-GM fallback, a stale `format_unavailable` response, and crosspost post-id
+selection.
 
 Those tests use synthetic DOM and mocked responses. They do not prove that
 Reddit's live DOM, Reddit's CDN, or NoBsDL's live video endpoint currently
