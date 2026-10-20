@@ -5,6 +5,9 @@ Reddit's live DOM, Reddit's live CDN, a real NoBsDL video job, and a real
 browser download. Record actual results; do not mark a row PASS from the
 automated tests alone.
 
+For the separate Reddit Comment Exporter, use
+[QA-comment-exporter.md](QA-comment-exporter.md) instead.
+
 ## Before you start
 
 Record:

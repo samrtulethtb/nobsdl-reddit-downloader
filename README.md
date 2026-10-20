@@ -25,6 +25,20 @@ redirects. No fake download buttons. Just download.**
 > through the userscript is still a manual QA item. Use [QA.md](QA.md) before
 > calling it production-ready.
 
+## Reddit Comment Exporter (separate userscript)
+
+This repository also contains an independent, optional userscript:
+[`reddit-comment-exporter.user.js`](reddit-comment-exporter.user.js). It exports
+the comments already loaded on a Reddit post to JSON, CSV or Markdown. It runs
+entirely in the browser, makes no network requests, and does not use the media
+downloader or any NoBsDL endpoint.
+
+It is deliberately separate from `nobsdl-reddit-media.user.js` and does not
+change that script. See
+[README-comment-exporter.md](README-comment-exporter.md) for install steps,
+formats, limitations and tests, and
+[QA-comment-exporter.md](QA-comment-exporter.md) for the live checklist.
+
 ## Install
 
 1. Install a userscript manager that provides `GM_xmlhttpRequest`, such as
