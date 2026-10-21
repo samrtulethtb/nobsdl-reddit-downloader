@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NoBsDL Reddit Media Downloader
 // @namespace    https://nobsdl.com/
-// @version      1.2.1
+// @version      1.2.2
 // @description  Save Reddit images, galleries and comment images straight from the page, download Reddit videos with audio through NoBsDL, and export the comments loaded on a post to JSON, CSV or Markdown. No popups, no fake buttons.
 // @author       NoBsDL
 // @icon         https://nobsdl.com/static/images/icon-192x192.png
@@ -250,7 +250,8 @@
     if (url.protocol !== "https:" || url.username || url.password || url.port) return null;
     const host = url.hostname.toLowerCase();
     if (host === "redgifs.com" || host === "www.redgifs.com" || host === "v3.redgifs.com") {
-      const m = url.pathname.match(/^\/watch\/([A-Za-z0-9_-]{3,64})\/?$/);
+      // /watch/<id> is the page; /ifr/<id> is the embed URL some posts carry.
+      const m = url.pathname.match(/^\/(?:watch|ifr)\/([A-Za-z0-9_-]{3,64})\/?$/);
       return m ? "https://www.redgifs.com/watch/" + m[1] : null;
     }
     if (host === "streamable.com" || host === "www.streamable.com") {
@@ -1165,7 +1166,9 @@
     for (const host of fallbacks || []) add(host, true);
     // Last resort: the wrappers between the media and its post, then the post.
     // mountBadge skips inline, shadow-hosting and hidden ones.
-    if (post && node && post.contains && post.contains(node)) {
+    // (Only when the media is inside the post: starting from the post itself
+    // this walk would climb to <main>, <body> and <html>.)
+    if (post && node && node !== post && post.contains && post.contains(node)) {
       for (let up = node.parentElement; up && up !== post; up = up.parentElement) add(up);
       add(post, true);
     }
@@ -1289,7 +1292,7 @@
     let lastError = null;
     for (const candidate of candidates) {
       try {
-        return await apiBinary(candidate);
+        return await apiBinary(candidate, item.timeout);
       } catch (error) {
         lastError = error;
         if (error && error.code === "no_transport") break;
@@ -2084,11 +2087,30 @@
     // A shreddit-post can have its own shadow root: an unslotted light-DOM
     // child is not rendered (0x0). Its article wrapper is the safe visible
     // surface in compact view, but only when it belongs to this post.
+    // Only a feed card's own <article>: on a post page the parent is <main>,
+    // and a badge there floats over the page instead of the media.
     const scope = videoScopeFor(post);
-    if (scope && scope !== post) fallbacks.push(scope);
+    if (scope && scope !== post && scope.tagName === "ARTICLE") fallbacks.push(scope);
     if (post) fallbacks.push(post);
     if (media) fallbacks.push(media);
     return mediaHostCandidates(post, media, fallbacks);
+  }
+
+  // A badge mounted on a fallback host while Reddit was still rendering the
+  // post (no media container yet) moves to the media container once that
+  // container can hold it.
+  function dropFallbackBadge(post) {
+    if (!post || !post.querySelector) return;
+    const better = MEDIA_HOST_SELECTORS.map((selector) => post.querySelector(selector))
+      .find((host) => host && hostCanHoldBadge(host));
+    if (!better) return;
+    const scope = videoScopeFor(post) || post;
+    for (const badge of Array.from(scope.querySelectorAll(BADGE_SELECTOR))) {
+      const host = badge.parentElement;
+      if (!host || badge.disabled) continue;
+      if (MEDIA_HOST_SELECTORS.some((selector) => host.matches && host.matches(selector))) continue;
+      if (host === post || host.contains(post) || post.contains(host)) badge.remove();
+    }
   }
 
   function openVideoPanel(context) {
@@ -2102,6 +2124,7 @@
   }
 
   function mountVideoBadge(context, media, post) {
+    dropFallbackBadge(post);
     if (post) {
       const scope = videoScopeFor(post);
       clearStaleVideoBadges(scope, context.url);
@@ -2123,6 +2146,7 @@
   function processVideo(player) {
     if (!player || nearestComment(player) || inAd(player)) return;
     const post = player.closest && player.closest(POST_SELECTOR);
+    if (gifSourceFor(post)) return;
     const context = withEmbedSource(postContextFor(player, {allowPage: true}));
     if (!context) return;
     mountVideoBadge(context, player, post);
@@ -2144,6 +2168,7 @@
   function processVideoPostFallback(post) {
     if (!post || nearestComment(post) || inAd(post)) return;
     if (String(post.getAttribute("post-type") || "").toLowerCase() !== "video") return;
+    if (gifSourceFor(post)) return;
     // A real player/native video is handled by processVideo/processNativeVideo;
     // this fallback exists for compact or temporarily player-less posts.
     if (post.querySelector(VIDEO_PLAYER_SELECTOR + ", video")) return;
@@ -2155,6 +2180,7 @@
   function processNativeVideo(video) {
     if (!video || video.closest(VIDEO_PLAYER_SELECTOR) || nearestComment(video) || inAd(video)) return;
     const post = video.closest && video.closest(POST_SELECTOR);
+    if (gifSourceFor(post)) return;
     const postType = post ? String(post.getAttribute("post-type") || "").toLowerCase() : "";
     const mediaContainer = video.closest && video.closest(
       "[slot='post-media-container'], [data-testid='post-media-container'], shreddit-aspect-ratio, "
@@ -2175,7 +2201,8 @@
     const post = img.closest(POST_SELECTOR);
     if (!post) return;
     if (String(post.getAttribute("post-type") || "").toLowerCase() === "video") return;
-    if (embedSourceFor(post)) return;
+    if (embedSourceFor(post) || gifSourceFor(post)) return;
+    dropFallbackBadge(post);
     pruneDeadBadges(post);
     if (post.querySelector(BADGE_SELECTOR)) return;
     const src = bestImageVariant(img.getAttribute("src"), img.getAttribute("srcset"), document.baseURI);
@@ -2206,6 +2233,43 @@
       });
     }, "image");
     if (badge && badge.parentElement) badge.parentElement.dataset.nobsdlReddit = "image";
+  }
+
+  // GIF posts (2026-10-21): Reddit plays them with a video player, but the
+  // file is an i.redd.it .gif and NoBsDL's backend does not take GIF posts.
+  // Like any Reddit image, the original is saved straight from i.redd.it.
+  function gifSourceFor(post) {
+    if (!post || !post.getAttribute) return null;
+    const parsed = parseRedditImageUrl(post.getAttribute("content-href") || "");
+    return parsed && parsed.ext === "gif" && parsed.host === "i.redd.it" ? parsed : null;
+  }
+
+  function processGifPost(post) {
+    if (!post || nearestComment(post) || inAd(post)) return;
+    const gif = gifSourceFor(post);
+    if (!gif) return;
+    dropFallbackBadge(post);
+    pruneDeadBadges(post);
+    if (post.querySelector(BADGE_SELECTOR)) return;
+    const context = postContextFor(post, {allowPage: true});
+    if (!context) return;
+    const title = postTitleFor(post) || "Reddit GIF";
+    const badge = mountBadge(mediaHostCandidates(post, post, []), "⬇ Save GIF", (button) => {
+      saveImageItem(
+        {title, postUrl: context.url},
+        // Original GIFs can be tens of MB: allow more time than a photo.
+        {url: gif.url, key: gif.key, index: 1, total: 1, alt: "", timeout: 180000},
+        {button, quiet: false}
+      ).then((result) => {
+        if (result.ok) {
+          button.textContent = "✓ Saved";
+          setTimeout(() => { if (button.isConnected) button.textContent = "⬇ Save GIF"; }, 3000);
+        } else {
+          button.textContent = "⬇ Save GIF";
+        }
+      });
+    }, "gif");
+    if (badge && badge.parentElement) badge.parentElement.dataset.nobsdlReddit = "gif";
   }
 
   function saveCommentImage(button, url, title) {
@@ -3134,6 +3198,7 @@
       if (state.open && !state.busy && panelBelongsElsewhere()) closePanel();
     }
     document.querySelectorAll(GALLERY_SELECTOR).forEach(processGallery);
+    document.querySelectorAll("shreddit-post[content-href], [data-testid='post-container'][content-href]").forEach(processGifPost);
     document.querySelectorAll("shreddit-post[content-href], [data-testid='post-container'][content-href]").forEach(processEmbedPost);
     document.querySelectorAll(VIDEO_PLAYER_SELECTOR).forEach(processVideo);
     document.querySelectorAll("shreddit-post[post-type='video'], [data-testid='post-container'][post-type='video']").forEach(processVideoPostFallback);

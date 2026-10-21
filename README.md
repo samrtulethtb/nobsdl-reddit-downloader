@@ -142,6 +142,22 @@ time. Collapsed comments are exported if their element exists. Deleted and
 removed comments are exported as Reddit displays them, with `is_deleted` /
 `is_removed` flags.
 
+## 1.2.2 fixes
+
+Checked on live Reddit on 2026-10-21 in Firefox and Chrome, including NSFW
+posts with a pool account that has mature content enabled:
+
+- GIF posts (`i.redd.it/....gif`, played by Reddit's video player) showed
+  "Download video", but NoBsDL's backend does not accept GIF posts. They now
+  get **Save GIF**, which saves the original `.gif` straight from i.redd.it,
+  like any Reddit image.
+- RedGIFs posts whose link is the embed form `redgifs.com/ifr/<id>` got no
+  button. They are now read as `redgifs.com/watch/<id>`.
+- On a post page, a video badge could end up on `<main>` (over the page,
+  not the media) when Reddit rendered the media late. Badges now go only on
+  the post's media container, or in a feed on the post's own `<article>`, and
+  move onto the media container once it appears.
+
 ## 1.2.1 fixes
 
 Found on live Reddit in Firefox on 2026-10-21, after 1.2.0:

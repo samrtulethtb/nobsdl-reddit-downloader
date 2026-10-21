@@ -1061,6 +1061,68 @@ async function main() {
     await context.close();
   }
 
+  // L4c. GIF posts (live 2026-10-21): Reddit plays an i.redd.it .gif with its
+  // video player, but NoBsDL's backend rejects GIF posts. The post gets one
+  // "Save GIF" badge that saves the original .gif straight from i.redd.it.
+  {
+    const gifUrl = 'https://www.reddit.com/r/nobsdl_test/comments/gf12345/live_gif_post/';
+    const body = '<main><shreddit-post permalink="/r/nobsdl_test/comments/gf12345/live_gif_post/" post-type="gif"'
+      + ' post-title="Live GIF Post" content-href="https://i.redd.it/gifabc123.gif"><h1 slot="title">Live GIF Post</h1>'
+      + '<div slot="post-media-container"><shreddit-blurred-container><shreddit-player post-id="t3_gf12345"'
+      + ' src="https://v.redd.it/gifabc/HLSPlaylist.m3u8"><video width="640" height="360"></video></shreddit-player>'
+      + '</shreddit-blurred-container></div></shreddit-post></main>';
+    const media = (route) => route.fulfill({status: 200, headers: Object.assign({'content-type': 'image/gif'}, CORS), body: Buffer.from('GIF89a;')});
+    const {context, page, calls, errors} = await liveSetup(browser, body, {media});
+    await page.goto(gifUrl);
+    await inject(page, true);
+    const report = await badgeReport(page);
+    check('gif: exactly one badge, labelled Save GIF', report.length === 1 && report[0].text === '⬇ Save GIF', report);
+    check('gif: the badge is a real box inside the media container and topmost', badgesOk(report), report);
+    check('gif: no Download video badge on a GIF post', (await page.locator('.nobsdl-reddit-badge[data-nobsdl-kind=video]').count()) === 0);
+    await page.evaluate(() => { window.__gmRequests = []; });
+    const download = page.waitForEvent('download');
+    await page.locator('.nobsdl-reddit-badge').first().click();
+    const file = await download;
+    check('gif: the original .gif is fetched from i.redd.it', JSON.stringify(await gmRequests(page)) === JSON.stringify(['https://i.redd.it/gifabc123.gif']), await gmRequests(page));
+    check('gif: the file is saved as .gif', /\.gif$/.test(file.suggestedFilename()), file.suggestedFilename());
+    check('gif: nothing goes to NoBsDL', calls.length === 0, calls);
+    check('gif: no page errors', errors.length === 0, errors);
+    await context.close();
+  }
+
+  // L4d. Media rendered late (live 2026-10-21): on a post page the post's
+  // parent is <main>; a badge must never float there. In a feed card the
+  // <article> fallback is fine until the media container appears, then the
+  // badge moves onto the media.
+  {
+    const late = (wrapper) => '<' + wrapper + '><shreddit-post permalink="/r/nobsdl_test/comments/rg12345/live_redgifs_post/"'
+      + ' post-type="link" post-title="Late RedGIFs" content-href="' + REDGIFS_SOURCE + '"><h1 slot="title">Late RedGIFs</h1>'
+      + '</shreddit-post></' + wrapper + '>';
+    const addMedia = () => {
+      const post = document.querySelector('shreddit-post');
+      const box = document.createElement('div');
+      box.setAttribute('slot', 'post-media-container');
+      box.style.cssText = 'display:block;width:640px;height:360px';
+      box.innerHTML = '<shreddit-embed providername="RedGIFs"></shreddit-embed>';
+      post.append(box);
+    };
+    for (const wrapper of ['main', 'article']) {
+      const {context, page, errors} = await liveSetup(browser, late(wrapper));
+      await page.goto(LIVE_REDGIFS_URL);
+      await inject(page, true);
+      await page.waitForTimeout(400);
+      const early = await page.evaluate(() => Array.from(document.querySelectorAll('.nobsdl-reddit-badge')).map((b) => b.parentElement.tagName.toLowerCase()));
+      check('late media (' + wrapper + '): no badge ever sits on <main>', !early.includes('main'), early);
+      await page.evaluate(addMedia);
+      await page.waitForTimeout(3200);
+      const report = await badgeReport(page);
+      check('late media (' + wrapper + '): one Video badge once the media exists', report.length === 1 && report[0].text === '⬇ Download video', report);
+      check('late media (' + wrapper + '): the badge is on the media container, inside it and topmost', report[0] && report[0].host === 'div' && badgesOk(report), report);
+      check('late media (' + wrapper + '): no page errors', errors.length === 0, errors);
+      await context.close();
+    }
+  }
+
   // L5. Ads: nothing inside a promoted comments-page video, a feed ad card or
   // a promoted post is ever touched; the real video above them still is.
   {

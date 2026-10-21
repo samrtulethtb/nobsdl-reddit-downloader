@@ -157,6 +157,10 @@ test("embedded video URLs: only exact RedGIFs/Streamable video links over https"
   assert.equal(parseEmbedVideoUrl("https://www.redgifs.com/watch/blueredfoxes"), "https://www.redgifs.com/watch/blueredfoxes");
   assert.equal(parseEmbedVideoUrl("https://redgifs.com/watch/blueredfoxes/?utm=1#x"), "https://www.redgifs.com/watch/blueredfoxes");
   assert.equal(parseEmbedVideoUrl("https://v3.redgifs.com/watch/blueredfoxes"), "https://www.redgifs.com/watch/blueredfoxes");
+  // Live 2026-10-21: some posts carry the embed URL /ifr/<id>.
+  assert.equal(parseEmbedVideoUrl("https://www.redgifs.com/ifr/unfortunateturbulenticelandic"), "https://www.redgifs.com/watch/unfortunateturbulenticelandic");
+  assert.equal(parseEmbedVideoUrl("https://www.redgifs.com/ifr/"), null);
+  assert.equal(parseEmbedVideoUrl("https://www.redgifs.com/users/someone"), null);
   assert.equal(parseEmbedVideoUrl("https://streamable.com/abc12"), "https://streamable.com/abc12");
   assert.equal(parseEmbedVideoUrl("https://www.streamable.com/abc12/"), "https://streamable.com/abc12");
   for (const bad of [
