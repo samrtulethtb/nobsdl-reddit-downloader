@@ -1,16 +1,18 @@
-// Browser-level verification for reddit-comment-exporter.user.js.
-// The Reddit page is a synthetic DOM fixture fulfilled in process. The script
-// makes no network requests, so only the fixture URL is ever loaded.
+// Browser-level verification for the comment-export feature of
+// nobsdl-reddit-media.user.js.
+// The Reddit page is a synthetic DOM fixture fulfilled in process. The comment
+// export makes no network requests: every request other than the fixture
+// navigation itself is recorded and the test fails if there is one.
 //
 // Run after `npm install` (Playwright is a dev dependency):
-//   CHROME_BIN=/usr/bin/google-chrome node tests/test_reddit_comment_exporter_browser.js
+//   CHROME_BIN=/usr/bin/google-chrome node tests/test_nobsdl_reddit_comment_export_browser.js
 'use strict';
 
 const fs = require('fs');
 const path = require('path');
 const {chromium} = require('playwright');
 
-const SCRIPT = fs.readFileSync(path.join(__dirname, '..', 'reddit-comment-exporter.user.js'), 'utf8');
+const SCRIPT = fs.readFileSync(path.join(__dirname, '..', 'nobsdl-reddit-media.user.js'), 'utf8');
 const POST_URL = 'https://www.reddit.com/r/test/comments/abc123/a_title/';
 let passed = 0;
 let failed = 0;
@@ -32,7 +34,8 @@ function fixture(options) {
       post-title="Test post"
       author="alice"
       comment-count="6">
-      <h1 slot="title">Test post</h1>
+      <h1 slot="title">Test post</h1>${options.media ? `
+      <shreddit-aspect-ratio><img src="https://preview.redd.it/toastimg.jpg?width=640&amp;format=pjpg&amp;auto=webp" width="640" height="360" alt="Post image"></shreddit-aspect-ratio>` : ''}
     </shreddit-post>`;
   return `<!doctype html>
 <html>
@@ -112,32 +115,53 @@ function emptyPostFixture() {
   </body></html>`;
 }
 
-async function openFixture(browser, url, html) {
+// `requests` collects every http(s) request that is not the fixture page
+// navigation itself. The page is served from memory, so after load there must
+// be none: the comment export (and the idle media script) must not touch the
+// network. Anything that is not the navigation is aborted, never answered.
+async function openFixture(browser, url, html, options) {
+  const settings = options || {};
   const context = await browser.newContext({
-    viewport: {width: 1200, height: 900},
+    viewport: settings.viewport || {width: 1200, height: 900},
     acceptDownloads: true,
   });
   const page = await context.newPage();
   const errors = [];
   const requests = [];
   page.on('pageerror', (error) => errors.push(String(error)));
-  page.on('request', (request) => requests.push(request.url()));
-  await page.route('https://www.reddit.com/**', (route) => route.fulfill({
-    status: 200,
-    contentType: 'text/html; charset=utf-8',
-    body: html,
-  }));
+  await context.route('**/*', (route) => {
+    const request = route.request();
+    if (request.isNavigationRequest() && request.frame() === page.mainFrame() && request.url().startsWith('https://www.reddit.com/')) {
+      return route.fulfill({
+        status: 200,
+        contentType: 'text/html; charset=utf-8',
+        body: html,
+      });
+    }
+    requests.push(request.url());
+    return route.abort();
+  });
   await page.goto(url, {waitUntil: 'domcontentloaded'});
+  if (settings.gm) await page.addScriptTag({content: GM_POLYFILL});
   await page.addScriptTag({content: SCRIPT});
   await page.waitForTimeout(1200);
   return {context, page, errors, requests};
 }
 
-const shadow = (page, selector) => page.locator('#reddit-comment-exporter-root').locator(selector);
+// Only for the toast-collision scenario: a GM_xmlhttpRequest that fails at
+// once, so the media script shows its error toast without any real request.
+const GM_POLYFILL = `
+  window.GM_xmlhttpRequest = function (opts) {
+    setTimeout(() => opts.onerror && opts.onerror({error: 'blocked in test'}), 0);
+  };
+`;
+
+const HOST = '#nobsdl-reddit-comment-export-root';
+const shadow = (page, selector) => page.locator(HOST).locator(selector);
 
 async function uiState(page) {
   return page.evaluate(() => {
-    const host = document.getElementById('reddit-comment-exporter-root');
+    const host = document.getElementById('nobsdl-reddit-comment-export-root');
     const root = host && host.shadowRoot;
     const button = root && root.querySelector('.rce-button');
     const overlay = root && root.querySelector('.rce-overlay');
@@ -375,9 +399,72 @@ function parseCsv(text) {
       check('spa: returning to the post restores the count',
         Boolean(back.button && !back.button.hidden && /· 7\b/.test(back.button.text)), back.button);
 
-      check('network: the userscript makes no external requests',
-        requests.every((url) => url.startsWith('https://www.reddit.com/')), requests);
+      check('network: opening, three exports, Escape, overlay close, dynamic load and SPA navigation made no request',
+        requests.length === 0, requests);
       check('page: no uncaught page errors', errors.length === 0, errors);
+      await context.close();
+    }
+
+    // Coexistence with the media script's own UI.
+    {
+      const {context, page, errors, requests} = await openFixture(browser, POST_URL, fixture({}));
+      await page.waitForTimeout(3200);
+      const counts = await page.evaluate(() => {
+        const host = document.getElementById('nobsdl-reddit-comment-export-root');
+        const media = document.getElementById('nobsdl-reddit-media');
+        const z = (node) => (node ? Number(getComputedStyle(node).zIndex) : null);
+        return {
+          hosts: document.querySelectorAll('#nobsdl-reddit-comment-export-root').length,
+          pills: host ? host.shadowRoot.querySelectorAll('.rce-button').length : 0,
+          dialogs: host ? host.shadowRoot.querySelectorAll('.rce-panel').length : 0,
+          mediaHost: Boolean(media),
+          commentZ: z(host),
+          mediaZ: z(media),
+        };
+      });
+      check('merge: after several re-scans there is exactly one comment host, one pill and one dialog',
+        counts.hosts === 1 && counts.pills === 1 && counts.dialogs === 1, counts);
+      check('merge: the media script UI host coexists with the comment export host',
+        counts.mediaHost === true);
+      check('merge: the comment host stacks one level below the media panel and toast host',
+        counts.commentZ === counts.mediaZ - 1, counts);
+      check('merge: the idle scan sent no request', requests.length === 0, requests);
+      check('merge: no page errors', errors.length === 0, errors);
+      await context.close();
+    }
+
+    // The pill must not collide with the media script's bottom-centre toast.
+    for (const viewport of [{width: 1280, height: 900}, {width: 800, height: 700}, {width: 390, height: 760}]) {
+      const {context, page, errors} = await openFixture(browser, POST_URL, fixture({media: true}), {viewport, gm: true});
+      await page.locator('.nobsdl-reddit-badge').first().click();
+      await page.locator('#nobsdl-reddit-media').locator('.toast:not([hidden])').waitFor({timeout: 5000});
+      const rects = await page.evaluate(() => {
+        const pill = document.getElementById('nobsdl-reddit-comment-export-root').shadowRoot.querySelector('.rce-button');
+        const toast = document.getElementById('nobsdl-reddit-media').shadowRoot.querySelector('.toast');
+        return {pill: pill.getBoundingClientRect().toJSON(), toast: toast.getBoundingClientRect().toJSON(), hidden: pill.hidden};
+      });
+      const overlap = !(rects.pill.right <= rects.toast.left || rects.pill.left >= rects.toast.right
+        || rects.pill.bottom <= rects.toast.top || rects.pill.top >= rects.toast.bottom);
+      check('toast: the pill is visible next to a media toast at ' + viewport.width + 'px', rects.hidden === false && rects.pill.width > 0, rects);
+      check('toast: the pill does not overlap the media toast at ' + viewport.width + 'px', overlap === false, rects);
+      check('toast: the pill stays inside the viewport at ' + viewport.width + 'px',
+        rects.pill.left >= 0 && rects.pill.right <= viewport.width && rects.pill.top >= 0 && rects.pill.bottom <= viewport.height, rects);
+      check('toast: no page errors at ' + viewport.width + 'px', errors.length === 0, errors);
+      await context.close();
+    }
+
+    // A visible media toast does not block the pill.
+    {
+      const {context, page} = await openFixture(browser, POST_URL, fixture({media: true}), {gm: true});
+      await page.locator('.nobsdl-reddit-badge').first().click();
+      await page.locator('#nobsdl-reddit-media').locator('.toast:not([hidden])').waitFor({timeout: 5000});
+      const media = await page.evaluate(() => {
+        const pill = document.getElementById('nobsdl-reddit-comment-export-root').shadowRoot.querySelector('.rce-button');
+        const rect = pill.getBoundingClientRect();
+        const top = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+        return {pillOnTop: top && top.id === 'nobsdl-reddit-comment-export-root'};
+      });
+      check('merge: the pill stays clickable when only a media toast is shown', media.pillOnTop === true, media);
       await context.close();
     }
 

@@ -5,9 +5,6 @@ Reddit's live DOM, Reddit's live CDN, a real NoBsDL video job, and a real
 browser download. Record actual results; do not mark a row PASS from the
 automated tests alone.
 
-For the separate Reddit Comment Exporter, use
-[QA-comment-exporter.md](QA-comment-exporter.md) instead.
-
 ## Before you start
 
 Record:
@@ -219,12 +216,141 @@ Record key state and result:
 
 Record each drill:
 
+## 11. Comment export (script 1.1.0)
+
+Covers what the automated suite cannot prove for the comment export: Reddit's
+live DOM, a real userscript manager, a real browser download and live
+lazy-loaded threads. Use a public post with several top-level comments and
+nested replies; if possible also one with a collapsed or "load more" area, an
+image-only comment and a deleted/removed comment. Record the URL used:
+
+```
+https://www.reddit.com/r/...
+```
+
+### 11.1 Visibility and placement
+
+- [ ] Open a Reddit feed. No **Export comments** button appears.
+- [ ] Open the fixture post. The button appears at the bottom-right without a
+  page reload, with the loaded count (`Export comments · N`).
+- [ ] Wait 5 seconds, scroll, and return to the tab. There is still exactly one
+  button.
+- [ ] The button does not cover a required Reddit control on desktop or mobile.
+- [ ] With the media script's toast showing (for example a failed image save on
+  a post that also has comments), the toast and the export button do not
+  overlap on a wide window and on a narrow one (under 900 px).
+- [ ] Opening the media panel (a video or gallery panel) covers the export
+  button; the button is not drawn above the media panel's dimmed backdrop.
+
+Record: PASS / FAIL / NOT TESTED. Notes:
+
+### 11.2 Count and scope
+
+- [ ] In DevTools count the unique `thingid`s of
+  `document.querySelectorAll('shreddit-comment')`; the button count matches.
+- [ ] The dialog shows the loaded count and Reddit's own count separately, and
+  states that only currently loaded comments are included.
+- [ ] On a large thread, scrolling or expanding comments yourself raises the
+  count within about a second.
+- [ ] The script does not click "more comments" or load more comments by itself.
+
+Record loaded count, Reddit's count and result:
+
+### 11.3 Dialog
+
+- [ ] Clicking the button opens the dialog with JSON, CSV and Markdown enabled.
+- [ ] Tab and Shift+Tab stay inside the dialog.
+- [ ] Escape closes it and returns focus to the button; so do the close button
+  and a click on the dimmed area.
+- [ ] Reopening after a download still works.
+
+Record: PASS / FAIL / NOT TESTED. Notes:
+
+### 11.4 JSON
+
+- [ ] One browser download named `reddit-comments-<subreddit>-<post-id>.json`
+  that parses as JSON.
+- [ ] `format` is `reddit-comments`, `version` is `1`, `count` equals the
+  loaded count, and `post` has the canonical URL, title, subreddit, author and
+  Reddit's comment count where available.
+- [ ] One object per unique `thingid`; a duplicate node does not create a
+  duplicate record.
+- [ ] A reply's `parent_id` is its parent's `t1_...` id, a top-level comment
+  points at the post `t3_...`, and `depth` increases with nesting.
+- [ ] A parent's `body` does not contain its child replies; a comment with a
+  script tag does not export the script text.
+- [ ] `is_submitter`, `is_deleted`, `is_removed` and `collapsed` match the page;
+  `created_utc` / `created_iso` are present only when Reddit rendered a time.
+- [ ] A collapsed comment is exported with its body; an image-only comment has
+  an empty `body` and no media file is downloaded.
+
+Record: PASS / FAIL / NOT TESTED. Notes:
+
+### 11.5 CSV
+
+- [ ] One download ending in `.csv` with the 13-column header
+  `id,parent_id,depth,author,score,created_utc,created_iso,is_submitter,is_deleted,is_removed,collapsed,permalink,body`.
+- [ ] A spreadsheet shows one row per unique comment; bodies with quotes and
+  line breaks open correctly.
+- [ ] A body beginning with `=`, `+`, `-` or `@` shows as text, not a formula.
+- [ ] Booleans say `true` / `false`; missing scores are blank.
+
+Record: PASS / FAIL / NOT TESTED. Notes:
+
+### 11.6 Markdown
+
+- [ ] One download ending in `.md` that opens in a Markdown viewer.
+- [ ] The header names the post URL, loaded count, Reddit's count and export
+  time; replies are indented under their parents.
+- [ ] Author, score, time, OP marker and permalink appear where available;
+  literal angle brackets in a body are escaped; image-only comments show
+  `_[no text]_`.
+
+Record: PASS / FAIL / NOT TESTED. Notes:
+
+### 11.7 Navigation
+
+- [ ] Navigate from the post to a feed. The button disappears.
+- [ ] Navigate to a different post without a full reload. The old post's
+  comments are not reused; the button stays hidden until that post's comments
+  load.
+- [ ] Return to the first post. The button and count return.
+- [ ] If the URL changes while the dialog is open, the dialog closes.
+
+Record: PASS / FAIL / NOT TESTED. Notes:
+
+### 11.8 Network and privacy
+
+- [ ] With DevTools -> Network open and **Preserve log** enabled, clearing the
+  log, then opening the dialog and downloading each format makes no request at
+  all from the userscript (in particular none to `nobsdl.com`, `i.redd.it` or
+  `preview.redd.it`).
+- [ ] DevTools -> Application shows no new `localStorage` / `sessionStorage`
+  entry from the script.
+- [ ] Exactly one browser download is produced per format click.
+- [ ] Media features (image badge, video badge, gallery) still behave as in
+  sections 1-10 on the same post.
+
+Record: PASS / FAIL / NOT TESTED. Notes:
+
+### 11.9 Appearance
+
+- [ ] On a narrow viewport the button is reachable and the dialog fits,
+  scrolling when needed; the format buttons stack.
+- [ ] The dialog is readable in light and dark colour schemes and with reduced
+  motion.
+
+Record: PASS / FAIL / NOT TESTED. Notes:
+
 ## Sign-off
 
 | Field | Value |
 | --- | --- |
 | Automated unit tests | `node --test tests/test_nobsdl_reddit_userscript.mjs` → 18/18 |
 | Automated browser tests | `tests/test_nobsdl_reddit_userscript_browser.js` → 96/96 |
+| Automated comment-export unit tests | `node --test tests/test_nobsdl_reddit_comment_export.mjs` → 12/12 |
+| Automated comment-export browser tests | `tests/test_nobsdl_reddit_comment_export_browser.js` → 64/64 |
+| Live comment export (section 11) | |
 | Live gallery result | |
 | Live single-image result | |
 | Live video result | |

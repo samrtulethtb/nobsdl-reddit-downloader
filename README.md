@@ -9,6 +9,9 @@ NoBsDL control to Reddit images, galleries, videos and comment images:
 - **Videos** open a panel with the MP4/MP3 formats NoBsDL returns for that post,
   measured progress, and an in-page hand-off of the finished file.
 - **Comment images** get an inline Save image button next to the image or link.
+- **Comment export** adds an **Export comments · N** button on post pages that
+  saves the comments already loaded in the page as JSON, CSV or Markdown. It
+  runs locally and sends nothing (see [Comment export](#comment-export)).
 
 It is independent of NoBsDL's all-in-one userscript
 (`nobsdl-download-button.user.js`); it does not replace or modify that script.
@@ -24,20 +27,11 @@ redirects. No fake download buttons. Just download.**
 > not run inside a userscript manager, so a live end-to-end NoBsDL video job
 > through the userscript is still a manual QA item. Use [QA.md](QA.md) before
 > calling it production-ready.
-
-## Reddit Comment Exporter (separate userscript)
-
-This repository also contains an independent, optional userscript:
-[`reddit-comment-exporter.user.js`](reddit-comment-exporter.user.js). It exports
-the comments already loaded on a Reddit post to JSON, CSV or Markdown. It runs
-entirely in the browser, makes no network requests, and does not use the media
-downloader or any NoBsDL endpoint.
-
-It is deliberately separate from `nobsdl-reddit-media.user.js` and does not
-change that script. See
-[README-comment-exporter.md](README-comment-exporter.md) for install steps,
-formats, limitations and tests, and
-[QA-comment-exporter.md](QA-comment-exporter.md) for the live checklist.
+>
+> **Comment export (added in 1.1.0, 2026-10-21):** verified only against
+> synthetic Reddit DOM in Chromium (see [Tests](#tests)). Its behaviour inside a
+> real userscript manager on live Reddit threads is a manual QA item (QA.md
+> section 11).
 
 ## Install
 
@@ -54,7 +48,7 @@ formats, limitations and tests, and
 
 The script has no build step and no runtime dependencies.
 
-These files come from the NoBsDL project's `tools/userscript/reddit/`
+These files come from the NoBsDL project's ``
 directory; this repository keeps the standalone Reddit userscript and its tests
 together so it can be installed and reviewed on its own.
 
@@ -84,6 +78,58 @@ the script cannot invent it.
   characters.
 - Video file names come from NoBsDL's `Content-Disposition` response; the
   script does not rename the server's file.
+
+## Comment export
+
+Since version 1.1.0 the same script also exports the comments of a Reddit post
+to a file, so there is one script to install.
+
+- On a current-Reddit post page that has comments loaded, an **Export comments
+  · N** button appears at the bottom-right. It is hidden on feeds and on posts
+  with no loaded comments.
+- `N` is the number of unique comment records found in the page (unique
+  `thingid`s of `shreddit-comment` elements that belong to this post). It is
+  not Reddit's total comment count; the dialog shows both.
+- The button opens a dialog (focus is kept inside it; Escape, the close button
+  or a click outside closes it) with **JSON**, **CSV** and **Markdown**.
+- **Loaded comments only.** The export reads only what Reddit has already
+  rendered in the page. It never clicks "more comments", never expands
+  anything and never requests more comments. Scroll or expand the thread first
+  if you want a larger file.
+- **Runs locally.** The comment export makes no network request, uses none of
+  the script's NoBsDL/image transport, reads no cookies or browser storage and
+  stores nothing. The file is built in the page and saved as one browser
+  download from a `Blob` URL. Nothing is sent to NoBsDL.
+
+Each comment record has `id`, `parent_id`, `depth`, `author`, `body` (plain
+text), `score`, `created_utc`, `created_iso`, `permalink`, `is_submitter`,
+`is_deleted`, `is_removed`, `collapsed` and `content_type` where the page
+provides them; missing values are `null` (JSON) or empty (CSV), never invented.
+Comments that only contain an image or video have an empty `body`; no comment
+media is downloaded by the export.
+
+| Format | Content |
+| --- | --- |
+| JSON | `format: "reddit-comments"`, `version: 1`, export time, a note about the loaded-only scope, the post (id, URL, title, subreddit, author, Reddit's comment count), `count`, and a flat `comments` array whose `parent_id` and `depth` rebuild the thread |
+| CSV | One row per comment, 13 columns: `id, parent_id, depth, author, score, created_utc, created_iso, is_submitter, is_deleted, is_removed, collapsed, permalink, body`. Quotes and line breaks are CSV-escaped; text cells starting with `=`, `+`, `-`, `@`, tab or carriage return get a leading `'` so a spreadsheet does not run them as a formula |
+| Markdown | A header (post URL, loaded count, Reddit's count, export time, the loaded-only note), then one bullet per comment indented by `depth` with author, score, time, an OP marker and a permalink where available, and the body in a blockquote with `<`, `>` and `&` escaped |
+
+File names: `reddit-comments-<subreddit>-<post-id>.json`, `.csv` or `.md` (unsafe
+characters replaced, base capped at 100 characters).
+
+Placement: the export button lives in its own Shadow DOM host
+(`#nobsdl-reddit-comment-export-root`), one z-index level below the media
+panel and toast host, so an open media panel covers it. The media script's
+toast is bottom-centre; on viewports narrower than 900 px the export button is
+lifted above that toast zone so the two never overlap.
+
+Limits: only the current `shreddit-comment` / `shreddit-post` structure with its
+`thingid`, `postid`, `parentid`, `depth`, `created` / `created-timestamp`,
+`score`, `author` and `permalink` attributes is read; Old Reddit and
+third-party clients are not supported, and Reddit can change its DOM at any
+time. Collapsed comments are exported if their element exists. Deleted and
+removed comments are exported as Reddit displays them, with `is_deleted` /
+`is_removed` flags.
 
 ## Network behaviour
 
@@ -169,6 +215,8 @@ for everyone, not a paid feature.
 - No analytics, telemetry, tracking pixels or stored history.
 - The script does not read or write `localStorage`, `sessionStorage` or
   `document.cookie`.
+- Comment export runs entirely in the page: no request, nothing uploaded, and
+  the comments are only written to the file you choose to download.
 - No request is made until you click a control (video format requests start
   only when the video panel is opened).
 - Only the canonical Reddit post URL (plus the chosen format id or MP3 bitrate
@@ -228,13 +276,29 @@ npm install
 CHROME_BIN=/usr/bin/google-chrome node tests/test_nobsdl_reddit_userscript_browser.js
 ```
 
-The browser suite needs a Chromium/Chrome binary; set `CHROME_BIN` if it is not
-found automatically.
+Comment export, unit level (URL parsing, timestamps, JSON/CSV/Markdown,
+filenames, and a static check that the delimited `// ── Comment export ──`
+section contains none of the transport helpers, network APIs, cookie/storage
+access or HTML injection):
 
-Last local result (2026-10-20):
+```sh
+node --test tests/test_nobsdl_reddit_comment_export.mjs
+```
+
+Comment export, browser level (synthetic Reddit DOM; any request other than
+the fixture page itself is recorded and fails the test):
+
+```sh
+CHROME_BIN=/usr/bin/google-chrome \
+  node tests/test_nobsdl_reddit_comment_export_browser.js
+```
+
+Last local result (2026-10-21, script 1.1.0):
 
 - `tests/test_nobsdl_reddit_userscript.mjs`: **18/18 passed**
 - `tests/test_nobsdl_reddit_userscript_browser.js`: **96/96 passed**
+- `tests/test_nobsdl_reddit_comment_export.mjs`: **12/12 passed**
+- `tests/test_nobsdl_reddit_comment_export_browser.js`: **64/64 passed**
 - `node --check nobsdl-reddit-media.user.js`: clean
 
 The browser suite covers the single-image save, gallery individual saves, the
@@ -244,6 +308,13 @@ loads after the fallback badge, the MP3 `audio_bitrate` path, comment images,
 duplicate prevention, re-rendered post elements and media hosts, SPA navigation,
 the no-GM fallback, a stale `format_unavailable` response, and crosspost post-id
 selection.
+
+The comment-export browser suite covers the button and its count (duplicate
+nodes counted once), the dialog, the three downloads and their contents,
+nested replies and parent ids, collapsed, image-only and deleted comments,
+dynamic comment loading, SPA navigation (feed, another post, back), empty
+posts, a single host/button after repeated scans, no overlap with the media
+toast at 1280, 800 and 390 px, and no network request during any of it.
 
 Those tests use synthetic DOM and mocked responses. They do not prove that
 Reddit's live DOM, Reddit's CDN, or NoBsDL's live video endpoint currently

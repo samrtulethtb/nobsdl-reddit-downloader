@@ -1,12 +1,21 @@
+// Unit tests for the comment-export section of the merged userscript
+// nobsdl-reddit-media.user.js. Pure functions only; the
+// browser behaviour is covered by tests/test_nobsdl_reddit_comment_export_browser.js.
 import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
 import {createRequire} from "node:module";
 import test from "node:test";
 
 const require = createRequire(import.meta.url);
-const SCRIPT = new URL("../reddit-comment-exporter.user.js", import.meta.url);
+const SCRIPT = new URL("../nobsdl-reddit-media.user.js", import.meta.url);
 const source = readFileSync(SCRIPT, "utf8");
-const api = require(SCRIPT.pathname);
+const merged = require(SCRIPT.pathname);
+// Comment-export functions plus the shared title cleaner the section reuses.
+const api = Object.assign({}, merged.commentExport, {cleanPostTitle: merged.cleanPostTitle});
+
+const SECTION_START = "// ── Comment export ──";
+const SECTION_END = "// ── End comment export ──";
+const section = source.slice(source.indexOf(SECTION_START), source.indexOf(SECTION_END));
 
 const post = {
   id: "t3_abc123",
@@ -127,31 +136,52 @@ function parseCsv(text) {
   return rows;
 }
 
-test("metadata is Reddit-only, least-privilege and network-free", () => {
+test("merged metadata announces comment export and keeps the media permissions", () => {
   const header = source.slice(0, source.indexOf("// ==/UserScript=="));
-  assert.deepEqual(
-    [...header.matchAll(/^\/\/ @match\s+(\S+)$/gm)].map((match) => match[1]),
-    ["https://www.reddit.com/*", "https://reddit.com/*"],
-  );
-  assert.deepEqual(
-    [...header.matchAll(/^\/\/ @grant\s+(\S+)$/gm)].map((match) => match[1]),
-    ["none"],
-  );
-  assert.deepEqual([...header.matchAll(/^\/\/ @connect\s+(\S+)$/gm)], []);
-  assert.match(header, /^\/\/ @noframes$/m);
-  assert.match(header, /^\/\/ @run-at\s+document-idle$/m);
-  assert.match(header, /^\/\/ @version\s+1\.\d+\.\d+$/m);
-  assert.doesNotMatch(header, /nobsdl\.com/i);
-  assert.ok([...header.match(/^\/\/ @name\s+(.*)$/m)[1]].length <= 100);
-  assert.ok([...header.match(/^\/\/ @description\s+(.*)$/m)[1]].length <= 500);
+  assert.match(header, /^\/\/ @version\s+1\.1\.0$/m);
+  const description = header.match(/^\/\/ @description\s+(.*)$/m)[1];
+  assert.match(description, /comments/i);
+  assert.match(description, /JSON, CSV or Markdown/);
+  assert.doesNotMatch(description, /\bno ads\b|ad-free/i);
+  assert.ok(description.length <= 500);
+  assert.deepEqual([...header.matchAll(/^\/\/ @name\s+(.*)$/gm)].map((m) => m[1]), ["NoBsDL Reddit Media Downloader"]);
+  assert.deepEqual([...header.matchAll(/^\/\/ @namespace\s+(.*)$/gm)].map((m) => m[1]), ["https://nobsdl.com/"]);
+  // The comment export adds no grant and no connect host of its own.
+  assert.deepEqual([...header.matchAll(/^\/\/ @grant\s+(\S+)$/gm)].map((m) => m[1]).sort(), ["GM.xmlHttpRequest", "GM_xmlhttpRequest"]);
+  assert.deepEqual([...header.matchAll(/^\/\/ @connect\s+(\S+)$/gm)].map((m) => m[1]).sort(), ["i.redd.it", "nobsdl.com", "preview.redd.it"]);
+  // The "what this script sends" header states that comment export sends nothing.
+  const preamble = source.slice(0, source.indexOf("(function () {"));
+  assert.match(preamble, /Comment export: runs locally and sends nothing/);
 });
 
-test("the script does not use page network APIs, storage or HTML injection", () => {
-  assert.doesNotMatch(source, /\bfetch\s*\(|new XMLHttpRequest|navigator\.sendBeacon|GM_xmlhttpRequest|GM\.xmlHttpRequest/);
+test("the comment-export section is delimited and non-empty", () => {
+  assert.ok(source.indexOf(SECTION_START) > 0);
+  assert.ok(source.indexOf(SECTION_END) > source.indexOf(SECTION_START));
+  assert.equal(source.split(SECTION_START).length, 2);
+  assert.equal(source.split(SECTION_END).length, 2);
+  assert.ok(section.length > 5000);
+});
+
+test("the comment-export section makes no requests and reads no cookies or storage", () => {
+  // Media transport helpers and every page network API.
+  assert.doesNotMatch(section, /\bapiGet\b|\bapiBinary\b|\bgmRequestFunction\b|GM_xmlhttpRequest|GM\.xmlHttpRequest|GM_|GM\./);
+  assert.doesNotMatch(section, /\bfetch\b|XMLHttpRequest|sendBeacon|WebSocket|EventSource|importScripts/);
+  assert.doesNotMatch(section, /NOBSDL_ORIGIN|nobsdl\.com|\.src\s*=|new Image|\.action\s*=|\.submit\(/);
+  // Cookies, storage and HTML injection.
+  assert.doesNotMatch(section, /document\.cookie|localStorage|sessionStorage|indexedDB|cookieStore/);
+  assert.doesNotMatch(section, /innerHTML|outerHTML|insertAdjacentHTML|document\.write|\beval\s*\(|new Function/);
+  // Output is a Blob download through the shared pure helper.
+  assert.match(section, /new Blob/);
+  assert.match(section, /saveBlob\(/);
+  // It must not click "load more" or other Reddit controls.
+  assert.doesNotMatch(section, /\.click\(\)/);
+});
+
+test("the whole merged script keeps its existing no-network-API guarantees", () => {
+  assert.doesNotMatch(source, /new XMLHttpRequest|\bfetch\s*\(|navigator\.sendBeacon/);
   assert.doesNotMatch(source, /localStorage|sessionStorage|document\.cookie/);
-  assert.doesNotMatch(source, /innerHTML|outerHTML|insertAdjacentHTML|document\.write|\beval\s*\(/);
-  assert.match(source, /URL\.createObjectURL/);
-  assert.match(source, /new Blob/);
+  assert.doesNotMatch(source, /innerHTML|outerHTML|insertAdjacentHTML|document\.write/);
+  assert.doesNotMatch(source, /\bno ads\b|ad-free|without ads/i);
 });
 
 test("recognises and canonicalises Reddit post URLs", () => {

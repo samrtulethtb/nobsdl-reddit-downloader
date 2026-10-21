@@ -2,14 +2,12 @@
   "name": "nobsdl-reddit-userscript",
   "version": "1.1.0",
   "private": true,
-  "description": "Userscripts that save Reddit images, galleries and comment images, download Reddit videos with audio through NoBsDL, and export loaded comments to JSON, CSV or Markdown.",
+  "description": "Userscript that saves Reddit images, galleries and comment images, downloads Reddit videos with audio through NoBsDL, and exports loaded comments to JSON, CSV or Markdown.",
   "license": "MIT",
   "scripts": {
-    "check": "node --check nobsdl-reddit-media.user.js && node --check reddit-comment-exporter.user.js",
-    "test": "node --test tests/test_nobsdl_reddit_userscript.mjs",
-    "test:comments": "node --test tests/test_reddit_comment_exporter.mjs",
-    "test:browser": "node tests/test_nobsdl_reddit_userscript_browser.js",
-    "test:browser:comments": "node tests/test_reddit_comment_exporter_browser.js"
+    "check": "node --check nobsdl-reddit-media.user.js",
+    "test": "node --test tests/test_nobsdl_reddit_userscript.mjs tests/test_nobsdl_reddit_comment_export.mjs",
+    "test:browser": "node tests/test_nobsdl_reddit_userscript_browser.js && node tests/test_nobsdl_reddit_comment_export_browser.js"
   },
   "devDependencies": {
     "playwright": "^1.54.1"
