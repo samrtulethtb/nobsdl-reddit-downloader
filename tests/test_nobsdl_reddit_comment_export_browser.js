@@ -4,13 +4,15 @@
 // export makes no network requests: every request other than the fixture
 // navigation itself is recorded and the test fails if there is one.
 //
-// Run after `npm install` (Playwright is a dev dependency):
-//   CHROME_BIN=/usr/bin/google-chrome node tests/test_nobsdl_reddit_comment_export_browser.js
+// Run (Playwright for Node installed anywhere outside the repo):
+//   NODE_PATH=<dir>/node_modules CHROME_BIN=/usr/bin/google-chrome node tests/test_nobsdl_reddit_comment_export_browser.js
+// Firefox (Playwright's own build, no executablePath):
+//   BROWSER=firefox NODE_PATH=<dir>/node_modules node tests/test_nobsdl_reddit_comment_export_browser.js
 'use strict';
 
 const fs = require('fs');
 const path = require('path');
-const {chromium} = require('playwright');
+const playwright = require('playwright');
 
 const SCRIPT = fs.readFileSync(path.join(__dirname, '..', 'nobsdl-reddit-media.user.js'), 'utf8');
 const POST_URL = 'https://www.reddit.com/r/test/comments/abc123/a_title/';
@@ -243,11 +245,13 @@ function parseCsv(text) {
 }
 
 (async () => {
-  const browser = await chromium.launch({
-    executablePath: process.env.CHROME_BIN || '/usr/bin/google-chrome',
-    headless: true,
-    args: ['--no-sandbox'],
-  });
+  const browser = process.env.BROWSER === 'firefox'
+    ? await playwright.firefox.launch({headless: true})
+    : await playwright.chromium.launch({
+      executablePath: process.env.CHROME_BIN || '/usr/bin/google-chrome',
+      headless: true,
+      args: ['--no-sandbox'],
+    });
 
   try {
     {

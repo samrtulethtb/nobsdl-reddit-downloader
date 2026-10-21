@@ -138,7 +138,7 @@ function parseCsv(text) {
 
 test("merged metadata announces comment export and keeps the media permissions", () => {
   const header = source.slice(0, source.indexOf("// ==/UserScript=="));
-  assert.match(header, /^\/\/ @version\s+1\.1\.0$/m);
+  assert.match(header, /^\/\/ @version\s+1\.2\.0$/m);
   const description = header.match(/^\/\/ @description\s+(.*)$/m)[1];
   assert.match(description, /comments/i);
   assert.match(description, /JSON, CSV or Markdown/);
@@ -146,8 +146,9 @@ test("merged metadata announces comment export and keeps the media permissions",
   assert.ok(description.length <= 500);
   assert.deepEqual([...header.matchAll(/^\/\/ @name\s+(.*)$/gm)].map((m) => m[1]), ["NoBsDL Reddit Media Downloader"]);
   assert.deepEqual([...header.matchAll(/^\/\/ @namespace\s+(.*)$/gm)].map((m) => m[1]), ["https://nobsdl.com/"]);
-  // The comment export adds no grant and no connect host of its own.
-  assert.deepEqual([...header.matchAll(/^\/\/ @grant\s+(\S+)$/gm)].map((m) => m[1]).sort(), ["GM.xmlHttpRequest", "GM_xmlhttpRequest"]);
+  // The comment export adds no grant and no connect host of its own; the
+  // only extra grants are the manager download function used for video files.
+  assert.deepEqual([...header.matchAll(/^\/\/ @grant\s+(\S+)$/gm)].map((m) => m[1]).sort(), ["GM.download", "GM.xmlHttpRequest", "GM_download", "GM_xmlhttpRequest"]);
   assert.deepEqual([...header.matchAll(/^\/\/ @connect\s+(\S+)$/gm)].map((m) => m[1]).sort(), ["i.redd.it", "nobsdl.com", "preview.redd.it"]);
   // The "what this script sends" header states that comment export sends nothing.
   const preamble = source.slice(0, source.indexOf("(function () {"));
@@ -292,6 +293,22 @@ test("Markdown export escapes HTML, marks OP and nests replies", () => {
   assert.match(markdown, /^    - \*\*\[deleted\]\*\*/m);
   assert.match(markdown, /^    > Reply with "quotes" and$/m);
   assert.match(markdown, /^      > \[deleted\]$/m);
+});
+
+test("Markdown links are Reddit-only and percent-encode characters that break the syntax", () => {
+  const link = (permalink) => api.commentsToMarkdown(post, [{
+    id: "t1_x", depth: 0, author: "alice", body: "hi", score: 1, permalink,
+  }], now);
+  assert.equal(api.markdownLinkUrl("https://www.reddit.com/r/t/comments/abc123/a_(b)/comment/c1/"),
+    "https://www.reddit.com/r/t/comments/abc123/a_%28b%29/comment/c1/");
+  assert.equal(api.markdownLinkUrl("https://www.reddit.com/r/t/a b<c>d"), "https://www.reddit.com/r/t/a%20b%3Cc%3Ed");
+  const out = link("https://www.reddit.com/r/t/comments/abc123/x)(evil)/comment/c1/");
+  assert.match(out, /\[link\]\(https:\/\/www\.reddit\.com\/r\/t\/comments\/abc123\/x%29%28evil%29\/comment\/c1\/\)/);
+  assert.doesNotMatch(out, /\)\(evil/);
+  for (const bad of ["http://www.reddit.com/r/t/", "https://old.reddit.com/r/t/", "https://evil.example/https://www.reddit.com/", "javascript:alert(1)", "", null, undefined]) {
+    assert.equal(api.markdownLinkUrl(bad), "", String(bad));
+    assert.doesNotMatch(link(bad), /\[link\]/, String(bad));
+  }
 });
 
 test("file names are stable and safe", () => {

@@ -19,14 +19,16 @@ It is independent of NoBsDL's all-in-one userscript
 NoBsDL's interaction promise applies to everyone: **No popups. No forced
 redirects. No fake download buttons. Just download.**
 
-> **Verification status (2026-10-20):** the script passes 18 unit tests and 96
-> Chromium browser checks against synthetic Reddit DOM fixtures with mocked
-> Reddit CDN and NoBsDL responses. A live logged-in Reddit probe in Chrome also
-> verified visible `⬇ Video` badges on a post page, the normal card feed and
-> the compact feed (including the post-level compact fallback). That probe did
-> not run inside a userscript manager, so a live end-to-end NoBsDL video job
-> through the userscript is still a manual QA item. Use [QA.md](QA.md) before
-> calling it production-ready.
+> **Verification status (2026-10-21, script 1.2.0):** the script passes 20 +
+> 13 unit tests and the browser suites (157 and 64 checks) in Chromium and in
+> Firefox against synthetic Reddit DOM fixtures with mocked Reddit CDN and
+> NoBsDL responses. The fixtures mirror the live structure that caused the
+> 1.1.0 bugs (see [1.2.0 fixes](#120-fixes)). A live logged-in Reddit probe in
+> Chrome earlier verified visible video badges on a post page, the normal card
+> feed and the compact feed. Those probes did not run inside a userscript
+> manager, so a live end-to-end NoBsDL video job through the userscript is
+> still a manual QA item. Use [QA.md](QA.md) before calling it
+> production-ready.
 >
 > **Comment export (added in 1.1.0, 2026-10-21):** verified only against
 > synthetic Reddit DOM in Chromium (see [Tests](#tests)). Its behaviour inside a
@@ -35,7 +37,8 @@ redirects. No fake download buttons. Just download.**
 
 ## Install
 
-1. Install a userscript manager that provides `GM_xmlhttpRequest`, such as
+1. Install a userscript manager that provides `GM_xmlhttpRequest` (and,
+   preferably, `GM_download`), such as
    [Tampermonkey](https://www.tampermonkey.net/) or
    [Violentmonkey](https://violentmonkey.github.io/).
 2. Add `nobsdl-reddit-media.user.js`:
@@ -57,9 +60,14 @@ together so it can be installed and reviewed on its own.
 | Reddit content | What appears | What it does | Network used |
 | --- | --- | --- | --- |
 | Single image post (`shreddit-post` with a Reddit-hosted image) | `⬇ Save image` badge on the media | Saves the largest real variant discoverable in the page, preferring the original `i.redd.it` file | `i.redd.it`, then `preview.redd.it` as fallback |
-| Gallery (`gallery-carousel` with `page-N` images) | `⬇ Gallery · N` badge | Opens a panel listing every Reddit-hosted page found; Save saves one image, Save all (.zip) downloads one local ZIP | `i.redd.it` / `preview.redd.it` only |
-| Video post (`shreddit-player`, `shreddit-player-2`, `shreddit-video-player`, or a native `<video>` in a video post) | `⬇ Video` badge | Opens the NoBsDL format panel and runs the async download flow | `nobsdl.com` only after the panel is opened |
+| Gallery (`gallery-carousel` with `page-N` images) | `⬇ Save gallery · N` badge | Opens a panel listing every Reddit-hosted page found; Save saves one image, Save all (.zip) downloads one local ZIP | `i.redd.it` / `preview.redd.it` only |
+| Video post (`shreddit-player`, `shreddit-player-2`, `shreddit-video-player`, or a native `<video>` in a video post) | `⬇ Download video` badge | Opens the NoBsDL format panel and runs the async download flow | `nobsdl.com` only after the panel is opened |
+| Link post embedding a RedGIFs or Streamable video (`content-href` is `https://www.redgifs.com/watch/<id>` or `https://streamable.com/<id>`) | `⬇ Download video` badge | Same panel; the external URL (not the Reddit post URL) is what NoBsDL is asked about | `nobsdl.com` only after the panel is opened |
 | Comment image (Reddit-hosted image link or embedded image in `shreddit-comment`) | Inline `⬇ Save image` button | Saves that comment image | `i.redd.it` / `preview.redd.it` only |
+
+Reddit's own promoted content (`shreddit-ad-post`, `shreddit-comments-page-ad`,
+`[slot="expanded-video-player"]`, or a post with a `promoted` attribute) is
+never touched: no badge is added there.
 
 Only still images served from `i.redd.it` or `preview.redd.it` are handled.
 External hosts (for example Imgur) are deliberately left alone. Gallery items
@@ -76,8 +84,11 @@ the script cannot invent it.
   `.jpg`.
 - Unsafe characters are removed and names are capped at roughly 120
   characters.
-- Video file names come from NoBsDL's `Content-Disposition` response; the
-  script does not rename the server's file.
+- Video file names: when the userscript manager provides `GM_download` /
+  `GM.download`, the script passes the (sanitized) `filename` from NoBsDL's job
+  status, or a title-based name if there is none. Without it, or if it fails,
+  the browser is pointed at the file URL and uses NoBsDL's `Content-Disposition`
+  name.
 
 ## Comment export
 
@@ -112,7 +123,7 @@ media is downloaded by the export.
 | --- | --- |
 | JSON | `format: "reddit-comments"`, `version: 1`, export time, a note about the loaded-only scope, the post (id, URL, title, subreddit, author, Reddit's comment count), `count`, and a flat `comments` array whose `parent_id` and `depth` rebuild the thread |
 | CSV | One row per comment, 13 columns: `id, parent_id, depth, author, score, created_utc, created_iso, is_submitter, is_deleted, is_removed, collapsed, permalink, body`. Quotes and line breaks are CSV-escaped; text cells starting with `=`, `+`, `-`, `@`, tab or carriage return get a leading `'` so a spreadsheet does not run them as a formula |
-| Markdown | A header (post URL, loaded count, Reddit's count, export time, the loaded-only note), then one bullet per comment indented by `depth` with author, score, time, an OP marker and a permalink where available, and the body in a blockquote with `<`, `>` and `&` escaped |
+| Markdown | A header (post URL, loaded count, Reddit's count, export time, the loaded-only note), then one bullet per comment indented by `depth` with author, score, time, an OP marker and a link when the permalink is an `https://www.reddit.com/` URL (with `(`, `)`, whitespace, `<` and `>` percent-encoded), and the body in a blockquote with `<`, `>` and `&` escaped |
 
 File names: `reddit-comments-<subreddit>-<post-id>.json`, `.csv` or `.md` (unsafe
 characters replaced, base capped at 100 characters).
@@ -131,17 +142,54 @@ time. Collapsed comments are exported if their element exists. Deleted and
 removed comments are exported as Reddit displays them, with `is_deleted` /
 `is_removed` flags.
 
+## 1.2.0 fixes
+
+Each root cause below was observed on live Reddit (Firefox 140 and Chrome) and
+is covered by the live-structure fixtures:
+
+- **Badges missing or misplaced in Firefox** (galleries showed no button): the
+  badge was appended to `shreddit-async-loader` (`display: inline`, shadow
+  root). It is now mounted on a verified block host, preferring
+  `[slot="post-media-container"]`.
+- **Ads got buttons:** promoted content is skipped (see Supported media).
+- **RedGIFs/Streamable posts had no button:** now recognised from
+  `content-href`; NoBsDL is asked about the external URL because the Reddit
+  post URL only yields an entry `/download` rejects.
+- **Image save fetched a small WebP preview:** see Images and galleries below.
+- **Video save navigated the Reddit tab** to the file URL: `GM_download` is used
+  when available.
+- **Gallery count stuck at "· 1" in feeds:** the label follows the real number
+  of `page-N` nodes on every scan.
+- **Scan starvation under infinite scroll:** scans now run at least about once
+  a second while mutations continue.
+- **Comment export Markdown links:** only `https://www.reddit.com/` permalinks
+  become links, and `(`, `)`, whitespace, `<` and `>` in the URL are
+  percent-encoded.
+- **Badges are more visible:** brand gradient, white 13px/800 text, 36px
+  minimum height; labels are `⬇ Download video`, `⬇ Save image`,
+  `⬇ Save gallery · N`.
+
 ## Network behaviour
 
 Nothing is sent while scrolling or scanning the page.
 
 ### Images and galleries
 
-1. The userscript manager fetches the original `https://i.redd.it/<path>` when
-   the URL is a `.jpg`/`.jpeg`/`.png`/`.gif` preview.
-2. If Reddit refuses that original (for example HTTP 404), the script retries
+1. The userscript manager fetches the original image when the URL is a
+   `.jpg`/`.jpeg`/`.png`/`.gif` preview. Modern previews look like
+   `preview.redd.it/<slug>-v0-<id>.<ext>`; the original is
+   `https://i.redd.it/<id>.<ext>` (the slug path on `i.redd.it` is refused with
+   HTTP 403). Older previews keep the same path on `i.redd.it`. A URL already on
+   `i.redd.it` is used as is. In galleries an `i.redd.it` URL found anywhere in
+   the page node (for example in a `zoomable-img`) is preferred over a preview.
+2. Image requests send `Accept: image/jpeg,image/png,image/gif,*/*;q=0.1`, so
+   Reddit does not answer with a WebP/AVIF preview where a JPEG exists.
+3. If Reddit refuses that original (for example HTTP 404), the script retries
    the exact `preview.redd.it` URL that Reddit itself displayed.
-3. The bytes are saved as a browser download. No NoBsDL request is made.
+4. The bytes are saved as a browser download. No NoBsDL request is made. If the
+   response is still WebP/AVIF it is saved as such; a browser setting such as
+   Firefox's "open WebP files in the browser" can then show it in a tab, which
+   the script cannot change.
 
 A single image or a single gallery row produces exactly one browser download.
 For a multi-image gallery, **Save all (.zip)** fetches the pages and builds one
@@ -254,6 +302,17 @@ for everyone, not a paid feature.
 - Video posts in compact view, or a player moved outside a `shreddit-post`,
   use a visible post/article surface instead of a hidden player host. The
   badge still resolves the canonical post URL before any request.
+- Badges are only mounted on a visible block-level host that does not have a
+  shadow root (Reddit's `shreddit-async-loader` is `display: inline` with a
+  shadow root, and Firefox places an absolutely-positioned badge inside such a
+  host outside the post). After mounting, the script checks that the badge has
+  a real box inside its host and otherwise removes it and tries the next host.
+  A badge with an empty box is removed and mounted again on a later scan.
+- RedGIFs/Streamable embed posts are recognised only from the post's
+  `content-href` (https, exact host, a `/watch/<id>` or `/<id>` path); anything
+  else, including lookalike hosts, ports and userinfo, is ignored. NoBsDL's
+  formats for these come from the external video, so no "Open post on NoBsDL"
+  link is shown for them.
 - Crossposts use the player/gallery `post-id` when it differs from the
   enclosing post, so the media's own post is requested rather than the outer
   crosspost.
@@ -272,8 +331,16 @@ node --test tests/test_nobsdl_reddit_userscript.mjs
 Browser-level UI and flows in Chromium (all Reddit/CDN/NoBsDL traffic mocked):
 
 ```sh
-npm install
-CHROME_BIN=/usr/bin/google-chrome node tests/test_nobsdl_reddit_userscript_browser.js
+CHROME_BIN=/usr/bin/google-chrome \
+  node tests/test_nobsdl_reddit_userscript_browser.js
+```
+
+Both browser files also run in Playwright's Firefox with `BROWSER=firefox`
+(no `CHROME_BIN` needed):
+
+```sh
+BROWSER=firefox \
+  node tests/test_nobsdl_reddit_userscript_browser.js
 ```
 
 Comment export, unit level (URL parsing, timestamps, JSON/CSV/Markdown,
@@ -293,13 +360,19 @@ CHROME_BIN=/usr/bin/google-chrome \
   node tests/test_nobsdl_reddit_comment_export_browser.js
 ```
 
-Last local result (2026-10-21, script 1.1.0):
+Last local result (2026-10-21, script 1.2.0):
 
-- `tests/test_nobsdl_reddit_userscript.mjs`: **18/18 passed**
-- `tests/test_nobsdl_reddit_userscript_browser.js`: **96/96 passed**
-- `tests/test_nobsdl_reddit_comment_export.mjs`: **12/12 passed**
-- `tests/test_nobsdl_reddit_comment_export_browser.js`: **64/64 passed**
+- `tests/test_nobsdl_reddit_userscript.mjs`: **20/20 passed**
+- `tests/test_nobsdl_reddit_userscript_browser.js`: **157/157 passed** in
+  Chromium and **157/157 passed** in Firefox 140 (`BROWSER=firefox`)
+- `tests/test_nobsdl_reddit_comment_export.mjs`: **13/13 passed**
+- `tests/test_nobsdl_reddit_comment_export_browser.js`: **64/64 passed** in
+  Chromium and **64/64 passed** in Firefox
 - `node --check nobsdl-reddit-media.user.js`: clean
+- Mutation check: with both the inline/shadow-host skip and the placement check
+  disabled, the Firefox run fails the live-structure badge tests (the badge is
+  rendered 28 px wide at a negative x offset outside the post); restored, it
+  passes.
 
 The browser suite covers the single-image save, gallery individual saves, the
 one-download gallery ZIP, video format lookup/progress/close-reopen/attachment,
@@ -307,7 +380,18 @@ a hidden-player compact post, a player outside a post/lightbox, a player that
 loads after the fallback badge, the MP3 `audio_bitrate` path, comment images,
 duplicate prevention, re-rendered post elements and media hosts, SPA navigation,
 the no-GM fallback, a stale `format_unavailable` response, and crosspost post-id
-selection.
+selection. The live-structure fixtures (post with an open shadow root and named
+slots, a `div[slot="post-media-container"]` holding an inline
+`shreddit-async-loader` with its own shadow root, a gallery whose pages carry
+`-v0-` previews and `zoomable-img` originals, RedGIFs/Streamable link posts
+including one behind a blurred container, a promoted video, a feed ad and a
+promoted post) assert that every badge has a non-zero box inside its media
+container, is the topmost element at its centre, and that no badge appears in
+an ad; that embed posts ask `/api/video-info` and `/download` about the
+external URL; that the gallery label follows hydration; that image saves use
+the derived `i.redd.it` original with the non-WebP `Accept` header; that video
+files go through `GM_download` (and fall back on its error); and that scans keep
+running during continuous DOM mutation.
 
 The comment-export browser suite covers the button and its count (duplicate
 nodes counted once), the dialog, the three downloads and their contents,

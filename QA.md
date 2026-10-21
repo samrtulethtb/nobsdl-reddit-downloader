@@ -62,8 +62,12 @@ Record: PASS / FAIL / NOT TESTED. Notes:
 
 ## 2. Single image
 
-- [ ] One `⬇ Save image` badge appears on the post media.
-- [ ] Click it once. The browser saves one file; no tab opens.
+- [ ] One `⬇ Save image` badge appears on the post media (in Firefox as well as
+  Chrome).
+- [ ] Click it once. The browser saves one file; no tab opens. In Firefox the
+  saved file is a JPEG/PNG/GIF (the request uses an `Accept` header without
+  WebP), so it is not opened in a new tab; if Reddit still returns WebP, record
+  it.
 - [ ] File name matches the post title and a sensible image extension.
 - [ ] The saved image matches the post (not an avatar, icon or unrelated
   thumbnail).
@@ -77,7 +81,12 @@ Record file name, image dimensions if known, and result:
 
 ## 3. Gallery
 
-- [ ] One `⬇ Gallery · N` badge appears; `N` equals Reddit's own page count.
+- [ ] One `⬇ Save gallery · N` badge appears (in Firefox as well as Chrome),
+  as a visible box in the top-right of the post media; `N` equals Reddit's own
+  page count, also in the feed right after the carousel loads (the label may
+  take up to about a second to catch up).
+- [ ] The saved gallery images are the original files (JPEG/PNG/GIF at full
+  size, from `i.redd.it/<id>.<ext>`), not 640px WebP previews.
 - [ ] Open it. The panel title is the post title.
 - [ ] Row count equals `N`; rows say "Image 1 of N" … in page order.
 - [ ] No invented pages and no external-host images.
@@ -101,10 +110,20 @@ Record the real `N`, file names, and result:
 
 Open the video post and the panel. Use DevTools to confirm requests.
 
-- [ ] Exactly one `⬇ Video` badge appears; the native `<video>` fallback does
-  not add a second one.
+- [ ] Exactly one `⬇ Download video` badge appears; the native `<video>`
+  fallback does not add a second one.
 - [ ] In the normal card feed, each visible video post gets a visible
-  `⬇ Video` badge.
+  `⬇ Download video` badge.
+- [ ] On a post page, Reddit's promoted video (`shreddit-comments-page-ad`) and
+  feed ads (`shreddit-ad-post`, promoted posts) get **no** NoBsDL badge.
+- [ ] A RedGIFs link post (also behind the 18+ blur) and a Streamable link post
+  each get one `⬇ Download video` badge. Opening it sends exactly one
+  `/api/video-info` request whose `url=` is the external RedGIFs/Streamable URL
+  (not the Reddit post URL), and the formats start a `/download` job for that
+  external URL.
+- [ ] With Tampermonkey/Violentmonkey, the finished video is saved through the
+  manager (the Reddit tab is not navigated, even if the file link fails) and has
+  the server's file name.
 - [ ] In compact view (`?feedViewType=compactView`), each visible video post
   still gets a visible badge on its post/article surface, not a 0×0 control
   inside the hidden player.
@@ -300,6 +319,8 @@ Record: PASS / FAIL / NOT TESTED. Notes:
 ### 11.6 Markdown
 
 - [ ] One download ending in `.md` that opens in a Markdown viewer.
+- [ ] Each `[link]` points to a `https://www.reddit.com/` permalink and still
+  works when the URL contains `(` or `)`.
 - [ ] The header names the post URL, loaded count, Reddit's count and export
   time; replies are indented under their parents.
 - [ ] Author, score, time, OP marker and permalink appear where available;
@@ -346,10 +367,10 @@ Record: PASS / FAIL / NOT TESTED. Notes:
 
 | Field | Value |
 | --- | --- |
-| Automated unit tests | `node --test tests/test_nobsdl_reddit_userscript.mjs` → 18/18 |
-| Automated browser tests | `tests/test_nobsdl_reddit_userscript_browser.js` → 96/96 |
-| Automated comment-export unit tests | `node --test tests/test_nobsdl_reddit_comment_export.mjs` → 12/12 |
-| Automated comment-export browser tests | `tests/test_nobsdl_reddit_comment_export_browser.js` → 64/64 |
+| Automated unit tests | `node --test tests/test_nobsdl_reddit_userscript.mjs` → 20/20 |
+| Automated browser tests | `tests/test_nobsdl_reddit_userscript_browser.js` → 157/157 (Chromium), 157/157 (Firefox, `BROWSER=firefox`) |
+| Automated comment-export unit tests | `node --test tests/test_nobsdl_reddit_comment_export.mjs` → 13/13 |
+| Automated comment-export browser tests | `tests/test_nobsdl_reddit_comment_export_browser.js` → 64/64 (Chromium), 64/64 (Firefox) |
 | Live comment export (section 11) | |
 | Live gallery result | |
 | Live single-image result | |

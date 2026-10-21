@@ -3,14 +3,17 @@
 // process; no public site or NoBsDL endpoint is contacted. GM_xmlhttpRequest is
 // provided by a small test polyfill on top of the intercepted network.
 //
-// Run after `npm install` (Playwright is a dev dependency):
-//   CHROME_BIN=/usr/bin/google-chrome node tests/test_nobsdl_reddit_userscript_browser.js
+// Run (Playwright for Node installed anywhere outside the repo, e.g. a scratch dir):
+//   NODE_PATH=<dir>/node_modules CHROME_BIN=/usr/bin/google-chrome node tests/test_nobsdl_reddit_userscript_browser.js
+// Firefox (Playwright's own build, no executablePath):
+//   BROWSER=firefox NODE_PATH=<dir>/node_modules node tests/test_nobsdl_reddit_userscript_browser.js
 'use strict';
 
 const fs = require('fs');
 const path = require('path');
-const {chromium} = require('playwright');
+const playwright = require('playwright');
 
+const ROOT = path.join(__dirname, '..');
 const SCRIPT = fs.readFileSync(path.join(__dirname, '..', 'nobsdl-reddit-media.user.js'), 'utf8');
 const MB = 1024 * 1024;
 const NOBSDL = 'https://nobsdl.com';
@@ -204,7 +207,7 @@ function videoPost() {
 function compactVideoPost() {
   return '<article><shreddit-post permalink="/r/nobsdl_test/comments/vid1234/fixture_video_post/"'
     + ' post-type="video" post-title="Fixture Video Post">'
-    + '<h1 slot="title">Fixture Video Post</h1>'
+    + '<h1 slot="title" style="margin:0;height:72px">Fixture Video Post</h1>'
     + '<div style="display:none"><shreddit-aspect-ratio><shreddit-player post-id="t3_vid1234"'
     + ' src="https://v.redd.it/fixture/HLSPlaylist.m3u8"></shreddit-player></shreddit-aspect-ratio></div>'
     + '</shreddit-post></article>';
@@ -277,8 +280,139 @@ function videoApi(polls) {
   };
 }
 
+// ── Fixtures that mirror the LIVE Reddit DOM ───────────────────────────────
+// shreddit-post has an open shadow root with named slots; its media sits in a
+// plain div[slot="post-media-container"]; Reddit's own lazy wrapper
+// shreddit-async-loader is display:inline AND has a shadow root with a <slot>.
+// Firefox places an absolutely-positioned child of such an inline host outside
+// the post, so a badge must never be mounted there.
+const LIVE_STYLE = '<style>'
+  + 'shreddit-async-loader { display: inline; }'
+  + 'shreddit-blurred-container { display: block; position: relative; width: 640px; height: 360px; }'
+  + 'shreddit-player { width: 640px; height: 360px; }'
+  + 'shreddit-embed { display: block; width: 640px; height: 360px; background: #223; }'
+  + '.blur-overlay { position: absolute; inset: 0; z-index: 10; background: #888; color: #fff; }'
+  + 'gallery-carousel { width: 640px; height: 360px; overflow: hidden; }'
+  + '[slot="post-media-container"] { width: 640px; }'
+  + 'shreddit-comments-page-ad, shreddit-ad-post { display: block; width: 640px; height: 360px; }'
+  + '</style>';
+
+const ATTACH_SHADOWS = '<script>(function () {'
+  + 'window.__attachShadows = function () {'
+  + '  document.querySelectorAll("shreddit-post").forEach(function (p) {'
+  + '    if (p.shadowRoot) return;'
+  + '    p.attachShadow({mode: "open"}).innerHTML = \'<slot name="title"></slot><slot name="post-media-container"></slot><slot name="expanded-video-player"></slot><slot></slot>\';'
+  + '  });'
+  + '  document.querySelectorAll("shreddit-async-loader").forEach(function (l) {'
+  + '    if (l.shadowRoot) return;'
+  + '    l.attachShadow({mode: "open"}).innerHTML = "<slot></slot>";'
+  + '  });'
+  + '};'
+  + 'window.__attachShadows();'
+  + '})();</script>';
+
+const LIVE_GALLERY_URL = 'https://www.reddit.com/r/nobsdl_test/comments/lg12345/live_gallery_post/';
+const LIVE_IMAGE_URL = 'https://www.reddit.com/r/nobsdl_test/comments/li12345/live_image_post/';
+const LIVE_REDGIFS_URL = 'https://www.reddit.com/r/nobsdl_test/comments/rg12345/live_redgifs_post/';
+const LIVE_STREAMABLE_URL = 'https://www.reddit.com/r/nobsdl_test/comments/st12345/live_streamable_post/';
+const LIVE_ADS_URL = 'https://www.reddit.com/r/nobsdl_test/comments/ad12345/live_video_with_ads/';
+const REDGIFS_SOURCE = 'https://www.redgifs.com/watch/blueredfoxes';
+const STREAMABLE_SOURCE = 'https://streamable.com/abc12';
+
+function livePage(count) {
+  const pages = [];
+  for (let i = 1; i <= count; i++) pages.push(livePageNode(i));
+  return pages.join('');
+}
+
+// page-1: preview only (-v0- slug path); page-2: zoomable-img with the real
+// i.redd.it original; page-3: both, the original must win.
+function livePageNode(n) {
+  const preview = '<img src="https://preview.redd.it/slug-name-v0-pic' + n + 'abc.jpg?width=640&amp;crop=smart&amp;auto=webp&amp;s=h' + n + '" width="640" height="360" alt="Page ' + n + '">';
+  const original = '<zoomable-img><img src="https://i.redd.it/orig' + n + 'xyz.jpeg" width="640" height="360" alt="Page ' + n + '"></zoomable-img>';
+  const body = n % 3 === 1 ? preview : n % 3 === 2 ? original : preview + original;
+  return '<li slot="page-' + n + '">' + body + '</li>';
+}
+
+function liveGalleryPost(pageCount, options) {
+  const settings = options || {};
+  const carousel = '<gallery-carousel post-id="t3_lg12345">' + livePage(pageCount) + '</gallery-carousel>';
+  const media = settings.noContainer
+    ? '<shreddit-async-loader>' + carousel + '</shreddit-async-loader>'
+    : '<div slot="post-media-container"><shreddit-async-loader>' + carousel + '</shreddit-async-loader></div>';
+  return '<shreddit-post permalink="/r/nobsdl_test/comments/lg12345/live_gallery_post/" post-type="gallery"'
+    + ' post-title="Live Gallery Post"><h1 slot="title">Live Gallery Post</h1>' + media + '</shreddit-post>';
+}
+
+function liveImagePost() {
+  return '<shreddit-post permalink="/r/nobsdl_test/comments/li12345/live_image_post/" post-type="image"'
+    + ' post-title="Live Image Post"><h1 slot="title">Live Image Post</h1>'
+    + '<div slot="post-media-container"><shreddit-async-loader>'
+    + '<img src="https://preview.redd.it/some-picture-v0-liveimg99.jpeg?width=640&amp;crop=smart&amp;auto=webp&amp;s=abc"'
+    + ' width="640" height="360" alt="Live image"></shreddit-async-loader></div></shreddit-post>';
+}
+
+function liveEmbedPost(kind) {
+  const redgifs = kind === 'redgifs';
+  return '<shreddit-post permalink="/r/nobsdl_test/comments/' + (redgifs ? 'rg12345/live_redgifs_post' : 'st12345/live_streamable_post') + '/"'
+    + ' post-type="link" post-title="' + (redgifs ? 'Live RedGIFs Post' : 'Live Streamable Post') + '"'
+    + ' domain="' + (redgifs ? 'redgifs.com' : 'streamable.com') + '"'
+    + ' content-href="' + (redgifs ? REDGIFS_SOURCE : STREAMABLE_SOURCE) + '">'
+    + '<h1 slot="title">' + (redgifs ? 'Live RedGIFs Post' : 'Live Streamable Post') + '</h1>'
+    + '<div slot="post-media-container">'
+    + (redgifs
+      ? '<shreddit-blurred-container><shreddit-embed providername="RedGIFs"></shreddit-embed><div class="blur-overlay">18+</div></shreddit-blurred-container>'
+      : '<shreddit-embed providername="Streamable"></shreddit-embed>')
+    + '</div></shreddit-post>';
+}
+
+function liveAdsPage() {
+  return '<shreddit-post permalink="/r/nobsdl_test/comments/ad12345/live_video_with_ads/" post-type="video"'
+    + ' post-title="Live Video With Ads"><h1 slot="title">Live Video With Ads</h1>'
+    + '<div slot="post-media-container"><shreddit-player post-id="t3_ad12345" src="https://v.redd.it/real/HLSPlaylist.m3u8"></shreddit-player></div>'
+    + '<shreddit-comments-page-ad><shreddit-player slot="expanded-video-player" post-id="t3_ad99999"'
+    + ' src="https://v.redd.it/promoted/HLSPlaylist.m3u8"><video width="640" height="360"></video></shreddit-player></shreddit-comments-page-ad>'
+    + '</shreddit-post>'
+    + '<shreddit-ad-post><div slot="post-media-container"><shreddit-player post-id="t3_ad88888"'
+    + ' src="https://v.redd.it/feedad/HLSPlaylist.m3u8"></shreddit-player></div></shreddit-ad-post>'
+    + '<shreddit-post permalink="/r/nobsdl_test/comments/ad77777/promoted_image/" post-type="image" promoted'
+    + ' post-title="Promoted"><h1 slot="title">Promoted</h1><div slot="post-media-container">'
+    + '<img src="https://preview.redd.it/promo-v0-pr1.jpg?width=640&amp;auto=webp" width="640" height="360" alt="Promoted"></div></shreddit-post>';
+}
+
+async function liveSetup(browser, body, options) {
+  const rig = await setup(browser, Object.assign({}, options || {}, {body: LIVE_STYLE + body + ATTACH_SHADOWS}));
+  return rig;
+}
+
+// Geometry of every badge as the viewer sees it.
+async function badgeReport(page) {
+  return page.evaluate(() => Array.from(document.querySelectorAll('.nobsdl-reddit-badge')).map((badge) => {
+    badge.scrollIntoView({block: 'center'});
+    const post = badge.closest('shreddit-post');
+    const media = (post && post.querySelector('[slot="post-media-container"]')) || post;
+    const box = badge.getBoundingClientRect();
+    const area = media ? media.getBoundingClientRect() : {left: 0, top: 0, right: 0, bottom: 0};
+    const top = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+    return {
+      text: badge.textContent,
+      width: Math.round(box.width),
+      height: Math.round(box.height),
+      inside: Boolean(media) && box.left >= area.left - 2 && box.top >= area.top - 2
+        && box.right <= area.right + 2 && box.bottom <= area.bottom + 2,
+      topmost: top === badge,
+      inAd: Boolean(badge.closest('shreddit-comments-page-ad, shreddit-ad-post, [slot="expanded-video-player"]')),
+      host: badge.parentElement ? badge.parentElement.tagName.toLowerCase() : '',
+    };
+  }));
+}
+
+const badgesOk = (report) => report.length > 0 && report.every((b) => b.width > 40 && b.height > 0 && b.inside && b.topmost && !b.inAd);
+
 async function main() {
-  const browser = await chromium.launch({executablePath: process.env.CHROME_BIN || '/usr/bin/google-chrome', args: ['--no-sandbox']});
+  const browser = process.env.BROWSER === 'firefox'
+    ? await playwright.firefox.launch({headless: true})
+    : await playwright.chromium.launch({executablePath: process.env.CHROME_BIN || '/usr/bin/google-chrome', args: ['--no-sandbox']});
 
   // 1. A single Reddit image is saved straight from i.redd.it, with no NoBsDL
   // request, a readable filename and exactly one badge across rescans.
@@ -319,7 +453,7 @@ async function main() {
     await page.goto(GALLERY_URL);
     await inject(page, true);
     const badges = page.locator('.nobsdl-reddit-badge');
-    check('gallery: one gallery badge counts the real pages', (await badges.count()) === 1 && (await badges.first().textContent()) === '⬇ Gallery · 3', await badges.allTextContents());
+    check('gallery: one gallery badge counts the real pages', (await badges.count()) === 1 && (await badges.first().textContent()) === '⬇ Save gallery · 3', await badges.allTextContents());
     check('gallery: the post image does not also get a still-image badge', (await badges.count()) === 1);
 
     await badges.first().click();
@@ -384,7 +518,7 @@ async function main() {
     await page.goto(VIDEO_URL);
     await inject(page, true);
     const badges = page.locator('.nobsdl-reddit-badge');
-    check('video: one video badge is added', (await badges.count()) === 1 && (await badges.first().textContent()) === '⬇ Video', await badges.allTextContents());
+    check('video: one video badge is added', (await badges.count()) === 1 && (await badges.first().textContent()) === '⬇ Download video', await badges.allTextContents());
     check('video: the native <video> fallback does not add a second badge', (await badges.count()) === 1);
     check('video: scanning the post sends nothing', calls.length === 0, calls);
 
@@ -449,7 +583,7 @@ async function main() {
     await inject(page, true);
     const badges = page.locator('.nobsdl-reddit-badge');
     check('video compact: one badge is added to a hidden-player post', (await badges.count()) === 1
-      && (await badges.first().textContent()) === '⬇ Video', await badges.allTextContents());
+      && (await badges.first().textContent()) === '⬇ Download video', await badges.allTextContents());
     const box = await badges.first().boundingBox();
     check('video compact: the badge is actually visible', Boolean(box && box.width > 0 && box.height > 0), box);
     await badges.first().click();
@@ -465,13 +599,13 @@ async function main() {
   {
     const body = '<article><shreddit-post permalink="/r/nobsdl_test/comments/vid1234/fixture_video_post/"'
       + ' post-type="video" post-title="Fixture Video Post">'
-      + '<h1 slot="title">Fixture Video Post</h1></shreddit-post></article>';
+      + '<h1 slot="title" style="margin:0;height:72px">Fixture Video Post</h1></shreddit-post></article>';
     const {context, page, calls, errors} = await setup(browser, {body, api: videoApi()});
     await page.goto(VIDEO_URL);
     await inject(page, true);
     const badges = page.locator('.nobsdl-reddit-badge');
     check('video lazy: a player-less post gets one fallback badge', (await badges.count()) === 1
-      && (await badges.first().textContent()) === '⬇ Video', await badges.allTextContents());
+      && (await badges.first().textContent()) === '⬇ Download video', await badges.allTextContents());
     await page.evaluate(() => {
       document.querySelector('shreddit-post').insertAdjacentHTML('beforeend',
         '<shreddit-aspect-ratio><shreddit-player post-id="t3_vid1234"'
@@ -494,7 +628,7 @@ async function main() {
     await inject(page, true);
     const badges = page.locator('.nobsdl-reddit-badge');
     check('video portal: a player outside a post gets one badge', (await badges.count()) === 1
-      && (await badges.first().textContent()) === '⬇ Video', await badges.allTextContents());
+      && (await badges.first().textContent()) === '⬇ Download video', await badges.allTextContents());
     await badges.first().click();
     await shadow(page, '.card').first().waitFor();
     check('video portal: the badge uses the player post-id', calls[0] === '/api/video-info?url=' + encodeURIComponent('https://www.reddit.com/comments/port123') + '&intent=mp4', calls);
@@ -616,7 +750,7 @@ async function main() {
     await page.evaluate((html) => { document.querySelector('main').innerHTML = html; }, freshVideo);
     await page.waitForTimeout(650);
     check('rerender: a fresh post DOM gets the video badge again', (await badges.count()) === 1
-      && (await badges.first().textContent()) === '⬇ Video', await badges.allTextContents());
+      && (await badges.first().textContent()) === '⬇ Download video', await badges.allTextContents());
     await page.evaluate(() => {
       const old = document.querySelector('shreddit-post shreddit-aspect-ratio');
       const wrap = document.createElement('div');
@@ -626,7 +760,7 @@ async function main() {
     });
     await page.waitForTimeout(650);
     check('rerender: replacing only the media host restores the badge', (await badges.count()) === 1
-      && (await badges.first().textContent()) === '⬇ Video', await badges.allTextContents());
+      && (await badges.first().textContent()) === '⬇ Download video', await badges.allTextContents());
     await badges.first().click();
     await shadow(page, '.card').first().waitFor();
     check('rerender: the new badge still starts the normal lookup', calls.length === 1
@@ -703,6 +837,278 @@ async function main() {
     check('crosspost: the player post-id identifies the media post', calls[0] === '/api/video-info?url=' + encodeURIComponent('https://www.reddit.com/comments/media9') + '&intent=mp4', calls);
     check('crosspost: no page errors', errors.length === 0, errors);
     await context.close();
+  }
+
+  // ── Live-DOM regression tests (Chrome and Firefox) ───────────────────────
+
+  // L1. Gallery in the live structure: slot container > inline async-loader
+  // (own shadow root) > carousel. The badge must be a real, visible, topmost
+  // box inside the media container, show the page count, and the panel must
+  // prefer the i.redd.it originals found anywhere in a page node.
+  {
+    const media = (route, url) => imageResponse(route);
+    const {context, page, calls, mediaRequests, errors} = await liveSetup(browser, liveGalleryPost(3), {media});
+    await page.goto(LIVE_GALLERY_URL);
+    await inject(page, true);
+    const badges = page.locator('.nobsdl-reddit-badge');
+    const report = await badgeReport(page);
+    check('live gallery: exactly one badge', report.length === 1, report);
+    check('live gallery: the badge is a real box inside the media container and topmost', badgesOk(report), report);
+    check('live gallery: the badge sits on the plain block container, not the inline loader', report[0] && report[0].host === 'div', report);
+    check('live gallery: the label is "Save gallery" with the real count', (await badges.first().textContent()) === '⬇ Save gallery · 3', await badges.allTextContents());
+    const look = await badges.first().evaluate((node) => {
+      const css = getComputedStyle(node);
+      return {image: css.backgroundImage, color: css.color, size: css.fontSize, weight: css.fontWeight, min: css.minHeight, radius: css.borderTopLeftRadius};
+    });
+    check('live gallery: the badge uses the brand gradient, white 13px/800 text and a 36px minimum',
+      /linear-gradient/.test(look.image) && look.color === 'rgb(255, 255, 255)' && look.size === '13px'
+      && look.weight === '800' && look.min === '36px' && look.radius === '10px', look);
+
+    await badges.first().click();
+    await shadow(page, '.gallery-item').first().waitFor();
+    check('live gallery: three rows', (await shadow(page, '.gallery-item').count()) === 3);
+    await page.evaluate(() => { window.__gmRequests = []; });
+    const zip = page.waitForEvent('download');
+    await shadow(page, '.save-all').click();
+    await zip;
+    await page.waitForTimeout(300);
+    const sent = await gmRequests(page);
+    check('live gallery: a preview-only page derives the i.redd.it original from its -v0- id', sent.includes('https://i.redd.it/pic1abc.jpg'), sent);
+    check('live gallery: a page with a zoomable-img uses the i.redd.it URL', sent.includes('https://i.redd.it/orig2xyz.jpeg'), sent);
+    check('live gallery: when a page has both, the original wins over the preview', sent.includes('https://i.redd.it/orig3xyz.jpeg')
+      && !sent.some((entry) => entry.includes('preview.redd.it/slug-name-v0-pic3abc')), sent);
+    check('live gallery: nothing goes to NoBsDL', calls.length === 0, calls);
+    check('live gallery: no page errors', errors.length === 0, errors);
+    await context.close();
+  }
+
+  // L1b. A gallery with no block container around it, only the inline loader:
+  // the badge must land on a visible block host instead.
+  {
+    const {context, page, errors} = await liveSetup(browser, liveGalleryPost(2, {noContainer: true}));
+    await page.goto(LIVE_GALLERY_URL);
+    await inject(page, true);
+    const report = await badgeReport(page);
+    check('live gallery (loader only): a badge is mounted', report.length === 1, report);
+    check('live gallery (loader only): the badge is not on the inline loader', report[0] && report[0].host !== 'shreddit-async-loader', report);
+    const box = await page.locator('.nobsdl-reddit-badge').first().boundingBox();
+    const post = await page.locator('shreddit-post').first().boundingBox();
+    check('live gallery (loader only): the badge is inside the post and visible', Boolean(box && post && box.width > 40
+      && box.x >= post.x - 2 && box.y >= post.y - 2 && box.x + box.width <= post.x + post.width + 2 && box.y + box.height <= post.y + post.height + 2), {box, post});
+    const top = await page.evaluate(() => {
+      const badge = document.querySelector('.nobsdl-reddit-badge');
+      badge.scrollIntoView({block: 'center'});
+      const rect = badge.getBoundingClientRect();
+      return document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2) === badge;
+    });
+    check('live gallery (loader only): the badge is the topmost element at its centre', top);
+    check('live gallery (loader only): no page errors', errors.length === 0, errors);
+    await context.close();
+  }
+
+  // L2. The count follows Reddit hydrating the carousel; the label is
+  // refreshed on a later scan and the badge is never duplicated.
+  {
+    const {context, page, errors} = await liveSetup(browser, liveGalleryPost(1));
+    await page.goto(LIVE_GALLERY_URL);
+    await inject(page, true);
+    const badges = page.locator('.nobsdl-reddit-badge');
+    check('gallery count: starts at the one page that is rendered', (await badges.first().textContent()) === '⬇ Save gallery · 1', await badges.allTextContents());
+    await page.evaluate((html) => document.querySelector('gallery-carousel').insertAdjacentHTML('beforeend', html), [2, 3, 4, 5].map(livePageNode).join(''));
+    await page.waitForFunction(() => /· 5$/.test((document.querySelector('.nobsdl-reddit-badge') || {}).textContent || ''), null, {timeout: 4000}).catch(() => {});
+    check('gallery count: the label is updated after hydration', (await badges.first().textContent()) === '⬇ Save gallery · 5', await badges.allTextContents());
+    check('gallery count: still exactly one badge', (await badges.count()) === 1);
+    check('gallery count: no page errors', errors.length === 0, errors);
+    await context.close();
+  }
+
+  // L3. Image post in the live structure: the badge is visible, and the save
+  // goes to the i.redd.it original derived from the -v0- id, asking for a
+  // non-WebP image. A WebP answer is still saved as-is.
+  {
+    const accepts = [];
+    const media = (route, url) => {
+      if (route.request().resourceType() === 'fetch') accepts.push(route.request().headers()['accept'] || '');
+      if (url.pathname === '/liveimg99.jpeg') {
+        return route.fulfill({status: 200, headers: Object.assign({'content-type': 'image/webp'}, CORS), body: Buffer.from('RIFFxxxxWEBP')});
+      }
+      return imageResponse(route);
+    };
+    const {context, page, calls, errors} = await liveSetup(browser, liveImagePost(), {media});
+    await page.goto(LIVE_IMAGE_URL);
+    await inject(page, true);
+    const report = await badgeReport(page);
+    check('live image: one visible topmost badge inside the media container', report.length === 1 && badgesOk(report), report);
+    check('live image: the label is "Save image"', report[0] && report[0].text === '⬇ Save image', report);
+    const downloadPromise = page.waitForEvent('download');
+    await page.locator('.nobsdl-reddit-badge').first().click();
+    const download = await downloadPromise;
+    const sent = await gmRequests(page);
+    check('live image: the original is derived from the -v0- id (not the slug path, not the preview)',
+      JSON.stringify(sent) === JSON.stringify(['https://i.redd.it/liveimg99.jpeg']), sent);
+    check('live image: the request asks for JPEG/PNG/GIF, not WebP or AVIF',
+      accepts.length === 1 && /^image\/jpeg,image\/png,image\/gif,\*\/\*;q=0\.1$/.test(accepts[0]), accepts);
+    check('live image: a WebP answer is still saved, named for what it is', download.suggestedFilename() === 'Live Image Post.webp', download.suggestedFilename());
+    check('live image: nothing goes to NoBsDL', calls.length === 0, calls);
+    check('live image: no page errors', errors.length === 0, errors);
+    await context.close();
+  }
+
+  // L4. RedGIFs (behind a blur) and Streamable link posts get a Video badge
+  // from the post's own content-href, and NoBsDL is asked about the EXTERNAL
+  // URL, never the Reddit post URL.
+  for (const kind of ['redgifs', 'streamable']) {
+    const source = kind === 'redgifs' ? REDGIFS_SOURCE : STREAMABLE_SOURCE;
+    const redditUrl = kind === 'redgifs' ? LIVE_REDGIFS_URL : LIVE_STREAMABLE_URL;
+    const api = (route, url) => {
+      if (url.pathname === '/api/video-info') {
+        return json(route, {
+          title: 'External clip',
+          duration: 12,
+          video_formats: {
+            '270p': {format_id: 'sd', quality_edge: 270, size_mb: 1.2, resolution: '480x270', tier: 'free'},
+            '1080p': {format_id: 'hd', quality_edge: 1080, size_mb: 9.5, resolution: '1920x1080', tier: 'free'},
+          },
+        });
+      }
+      if (url.pathname === '/download') return json(route, {ok: true, status: 'processing', status_url: '/api/free-download/status/fixturejob1'});
+      if (url.pathname === '/api/free-download/status/fixturejob1') {
+        return json(route, {status: 'ready', filename: 'External clip.mp4', direct_url: '/api/free-download/file/fixturejob1'});
+      }
+      if (url.pathname === '/api/free-download/file/fixturejob1') {
+        return route.fulfill({status: 200, headers: Object.assign({'content-type': 'video/mp4', 'content-disposition': 'attachment; filename="External clip.mp4"'}, CORS), body: 'mp4'});
+      }
+      return route.fulfill({status: 404, headers: CORS, body: ''});
+    };
+    const {context, page, calls, errors} = await liveSetup(browser, liveEmbedPost(kind), {api});
+    await page.goto(redditUrl);
+    await inject(page, true);
+    const report = await badgeReport(page);
+    check('embed ' + kind + ': exactly one Video badge', report.length === 1 && report[0].text === '⬇ Download video', report);
+    check('embed ' + kind + ': the badge is a real box inside the media container and topmost', badgesOk(report), report);
+    check('embed ' + kind + ': no still-image badge is added on the thumbnail', report.length === 1);
+    check('embed ' + kind + ': scanning sends nothing', calls.length === 0, calls);
+    await page.locator('.nobsdl-reddit-badge').first().click();
+    await shadow(page, '.card').first().waitFor();
+    check('embed ' + kind + ': /api/video-info is asked about the external URL',
+      JSON.stringify(calls) === JSON.stringify(['/api/video-info?url=' + encodeURIComponent(source) + '&intent=mp4']), calls);
+    check('embed ' + kind + ': the real external formats are listed', (await shadow(page, '.card .q').allTextContents()).join(',').includes('1080p'));
+    check('embed ' + kind + ': no "Open post on NoBsDL" link is offered for an embed', (await shadow(page, '.foot a').count()) === 0);
+    const downloadPromise = page.waitForEvent('download');
+    await shadow(page, '.card').first().click();
+    const download = await downloadPromise;
+    const jobs = calls.filter((call) => call.startsWith('/download'));
+    check('embed ' + kind + ': the job is started for the external URL with the chosen format_id',
+      jobs.length === 1 && jobs[0].startsWith('/download?url=' + encodeURIComponent(source) + '&format=mp4&async=1&format_id='), jobs);
+    check('embed ' + kind + ': the browser saves the file', download.suggestedFilename() === 'External clip.mp4', download.suggestedFilename());
+    check('embed ' + kind + ': no page errors', errors.length === 0, errors);
+    await context.close();
+  }
+
+  // L4b. Lookalike and non-https content-href values never produce a badge.
+  {
+    const bad = ['http://www.redgifs.com/watch/blueredfoxes', 'https://redgifs.com.evil.com/watch/blueredfoxes',
+      'https://user@streamable.com/abc12', 'https://www.redgifs.com:8443/watch/blueredfoxes', 'https://streamable.com/e/abc12'];
+    const body = bad.map((href, i) => '<shreddit-post permalink="/r/nobsdl_test/comments/bad' + (1000 + i) + '/x/" post-type="link"'
+      + ' post-title="Bad ' + i + '" content-href="' + href + '"><h1 slot="title">Bad ' + i + '</h1>'
+      + '<div slot="post-media-container"><shreddit-embed></shreddit-embed></div></shreddit-post>').join('');
+    const {context, page, errors} = await liveSetup(browser, body);
+    await page.goto('https://www.reddit.com/r/nobsdl_test/');
+    await inject(page, true);
+    check('embed: rejected hosts, http, userinfo, ports and non-video paths get no badge', (await page.locator('.nobsdl-reddit-badge').count()) === 0, await page.locator('.nobsdl-reddit-badge').allTextContents());
+    check('embed: no page errors for rejected links', errors.length === 0, errors);
+    await context.close();
+  }
+
+  // L5. Ads: nothing inside a promoted comments-page video, a feed ad card or
+  // a promoted post is ever touched; the real video above them still is.
+  {
+    const {context, page, errors} = await liveSetup(browser, liveAdsPage());
+    await page.goto(LIVE_ADS_URL);
+    await inject(page, true);
+    await page.waitForTimeout(700);
+    const report = await badgeReport(page);
+    check('ads: exactly one badge (the real video)', report.length === 1 && report[0].text === '⬇ Download video', report);
+    check('ads: no badge inside an ad container', report.every((b) => !b.inAd), report);
+    check('ads: the real video badge is visible, inside its media container and topmost', badgesOk(report), report);
+    check('ads: the promoted post gets no badge',
+      (await page.locator('shreddit-post[promoted] .nobsdl-reddit-badge').count()) === 0
+      && (await page.locator('shreddit-ad-post .nobsdl-reddit-badge, shreddit-comments-page-ad .nobsdl-reddit-badge').count()) === 0);
+    check('ads: no page errors', errors.length === 0, errors);
+    await context.close();
+  }
+
+  // L6. Infinite scroll keeps the DOM mutating constantly; scans must still
+  // run (at least about once a second), not wait for the mutations to stop.
+  {
+    const {context, page, errors} = await liveSetup(browser, '');
+    await page.goto(LIVE_GALLERY_URL);
+    await inject(page, true);
+    await page.evaluate((html) => {
+      window.__churn = setInterval(() => document.querySelector('main').append(document.createElement('i')), 30);
+      setTimeout(() => {
+        document.querySelector('main').insertAdjacentHTML('beforeend', html);
+        window.__attachShadows();
+      }, 200);
+      setTimeout(() => clearInterval(window.__churn), 5000);
+    }, liveGalleryPost(2));
+    const start = Date.now();
+    await page.waitForSelector('.nobsdl-reddit-badge', {timeout: 3000}).catch(() => {});
+    const waited = Date.now() - start;
+    const stillChurning = await page.evaluate(() => document.querySelectorAll('main > i').length > 20);
+    check('scan: a badge appears within ~2s while the DOM is still mutating continuously',
+      (await page.locator('.nobsdl-reddit-badge').count()) === 1 && waited < 2600 && stillChurning, {waited, stillChurning});
+    check('scan: no page errors', errors.length === 0, errors);
+    await context.close();
+  }
+
+  // L7. Video files go through the userscript manager's download function when
+  // there is one (no tab navigation, a sane name); on its error, or when it
+  // does not exist, the browser is pointed at the file instead.
+  {
+    const polls = [{status: 'ready', filename: '../Evil:Name?.mp4', direct_url: '/api/free-download/file/fixturejob1'}];
+    const rig = await setup(browser, {body: videoPost(), api: videoApi(polls)});
+    await rig.page.addInitScript(() => { window.__gmDownloads = []; window.GM_download = (opts) => { window.__gmDownloads.push({url: opts.url, name: opts.name, saveAs: opts.saveAs}); }; });
+    await rig.page.goto(VIDEO_URL);
+    await inject(rig.page, true);
+    await rig.page.locator('.nobsdl-reddit-badge').first().click();
+    await shadow(rig.page, '.card').first().waitFor();
+    await shadow(rig.page, '.card:not(.locked)').first().click();
+    await shadow(rig.page, '.result-ok').waitFor();
+    const handed = await rig.page.evaluate(() => window.__gmDownloads);
+    check('video save: the file is handed to GM_download once, with a sanitized server name and no save-as prompt',
+      handed.length === 1 && handed[0].url === NOBSDL + '/api/free-download/file/fixturejob1'
+      && handed[0].name === 'Evil Name.mp4' && handed[0].saveAs === false, handed);
+    check('video save: the Reddit tab is not navigated', rig.page.url() === VIDEO_URL, rig.page.url());
+    check('video save: no page errors', rig.errors.length === 0, rig.errors);
+    await rig.context.close();
+  }
+  {
+    const rig = await setup(browser, {body: videoPost(), api: videoApi([{status: 'ready', direct_url: '/api/free-download/file/fixturejob1'}])});
+    await rig.page.addInitScript(() => { window.__gmDownloads = []; window.GM_download = (opts) => { window.__gmDownloads.push({name: opts.name}); }; });
+    await rig.page.goto(VIDEO_URL);
+    await inject(rig.page, true);
+    await rig.page.locator('.nobsdl-reddit-badge').first().click();
+    await shadow(rig.page, '.card').first().waitFor();
+    await shadow(rig.page, '.card:not(.locked)').first().click();
+    await shadow(rig.page, '.result-ok').waitFor();
+    const handed = await rig.page.evaluate(() => window.__gmDownloads);
+    check('video save: without a server filename the name comes from the post title', handed.length === 1 && handed[0].name === 'Fixture Video Post.mp4', handed);
+    await rig.context.close();
+  }
+  {
+    const rig = await setup(browser, {body: videoPost(), api: videoApi([{status: 'ready', filename: 'Fixture Video Post.mp4', direct_url: '/api/free-download/file/fixturejob1'}])});
+    await rig.page.addInitScript(() => { window.__gmDownloads = 0; window.GM_download = (opts) => { window.__gmDownloads += 1; setTimeout(() => opts.onerror && opts.onerror({error: 'not_succeeded'}), 10); }; });
+    await rig.page.goto(VIDEO_URL);
+    await inject(rig.page, true);
+    await rig.page.locator('.nobsdl-reddit-badge').first().click();
+    await shadow(rig.page, '.card').first().waitFor();
+    const downloadPromise = rig.page.waitForEvent('download');
+    await shadow(rig.page, '.card:not(.locked)').first().click();
+    const download = await downloadPromise;
+    check('video save: when GM_download fails the previous browser download still happens', download.suggestedFilename() === 'Fixture Video Post.mp4'
+      && (await rig.page.evaluate(() => window.__gmDownloads)) === 1, download.suggestedFilename());
+    await rig.context.close();
   }
 
   await browser.close();

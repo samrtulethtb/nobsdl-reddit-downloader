@@ -12,6 +12,8 @@ const {
   parseRedditImageUrl,
   isRedditImageUrl,
   originalImageUrl,
+  parseEmbedVideoUrl,
+  galleryLabel,
   imageKey,
   srcsetCandidates,
   bestImageVariant,
@@ -39,7 +41,7 @@ test("metadata is least-privilege and Reddit-only", () => {
   const matches = [...header.matchAll(/^\/\/ @match\s+(\S+)$/gm)].map((m) => m[1]);
   assert.deepEqual(matches, ["*://reddit.com/*", "*://*.reddit.com/*", "*://redd.it/*"]);
   assert.deepEqual([...header.matchAll(/^\/\/ @exclude\s+(\S+)$/gm)].map((m) => m[1]), ["*://embed.reddit.com/*"]);
-  assert.deepEqual([...header.matchAll(/^\/\/ @grant\s+(\S+)$/gm)].map((m) => m[1]).sort(), ["GM.xmlHttpRequest", "GM_xmlhttpRequest"]);
+  assert.deepEqual([...header.matchAll(/^\/\/ @grant\s+(\S+)$/gm)].map((m) => m[1]).sort(), ["GM.download", "GM.xmlHttpRequest", "GM_download", "GM_xmlhttpRequest"]);
   assert.deepEqual([...header.matchAll(/^\/\/ @connect\s+(\S+)$/gm)].map((m) => m[1]).sort(), ["i.redd.it", "nobsdl.com", "preview.redd.it"]);
   assert.deepEqual(IMAGE_HOSTS, ["i.redd.it", "preview.redd.it"]);
   assert.match(header, /^\/\/ @noframes$/m);
@@ -128,12 +130,64 @@ test("only Reddit-hosted still images are accepted", () => {
 });
 
 test("original image path upgrades a preview to i.redd.it when possible", () => {
-  assert.equal(originalImageUrl("https://preview.redd.it/merlin-v0-abc.jpg?width=640&auto=webp"), "https://i.redd.it/merlin-v0-abc.jpg");
+  // Modern previews are /<slug>-v0-<id>.<ext>; only i.redd.it/<id>.<ext> is the original.
+  assert.equal(originalImageUrl("https://preview.redd.it/merlin-v0-abc.jpg?width=640&auto=webp"), "https://i.redd.it/abc.jpg");
+  assert.equal(originalImageUrl("https://preview.redd.it/merlin-soaking-up-the-sun-v0-g9jh3qsz0cwh1.jpeg?width=640&crop=smart&auto=webp&s=x"), "https://i.redd.it/g9jh3qsz0cwh1.jpeg");
+  assert.equal(originalImageUrl("https://preview.redd.it/v0-xyz9.PNG"), "https://i.redd.it/xyz9.png");
+  assert.equal(originalImageUrl("https://preview.redd.it/a-v0-q1.gif?format=png"), "https://i.redd.it/q1.gif");
+  // Plain (old-style) preview paths keep their path on i.redd.it; .jpeg is accepted.
+  assert.equal(originalImageUrl("https://preview.redd.it/foo.jpeg?width=320"), "https://i.redd.it/foo.jpeg");
+  assert.equal(originalImageUrl("https://preview.redd.it/foo.png?width=320"), "https://i.redd.it/foo.png");
+  // Already on i.redd.it: kept.
   assert.equal(originalImageUrl("https://i.redd.it/merlin-v0-abc.png?x=1"), "https://i.redd.it/merlin-v0-abc.png");
+  assert.equal(originalImageUrl("https://i.redd.it/abc123.jpeg"), "https://i.redd.it/abc123.jpeg");
+  assert.equal(originalImageUrl("http://i.redd.it/abc123.jpg"), "https://i.redd.it/abc123.jpg");
+  // Not an image we can upgrade, or not Reddit.
   assert.equal(originalImageUrl("https://preview.redd.it/foo.webp"), null);
+  assert.equal(originalImageUrl("https://preview.redd.it/a-v0-q1.webp?s=1"), null);
+  assert.equal(originalImageUrl("https://example.com/a-v0-q1.jpg"), null);
+  assert.equal(originalImageUrl("https://i.redd.it.evil.example/abc.jpg"), null);
+  assert.equal(originalImageUrl("https://preview.redd.it/foo.mp4"), null);
   assert.equal(originalImageUrl("https://example.com/foo.jpg"), null);
   assert.equal(imageKey("https://preview.redd.it/foo.jpg?width=320"), imageKey("https://preview.redd.it/foo.jpg?width=1080"));
   assert.equal(imageKey("https://i.redd.it/foo.jpg"), imageKey("https://preview.redd.it/foo.jpg?width=640"));
+});
+
+test("embedded video URLs: only exact RedGIFs/Streamable video links over https", () => {
+  assert.equal(parseEmbedVideoUrl("https://www.redgifs.com/watch/blueredfoxes"), "https://www.redgifs.com/watch/blueredfoxes");
+  assert.equal(parseEmbedVideoUrl("https://redgifs.com/watch/blueredfoxes/?utm=1#x"), "https://www.redgifs.com/watch/blueredfoxes");
+  assert.equal(parseEmbedVideoUrl("https://v3.redgifs.com/watch/blueredfoxes"), "https://www.redgifs.com/watch/blueredfoxes");
+  assert.equal(parseEmbedVideoUrl("https://streamable.com/abc12"), "https://streamable.com/abc12");
+  assert.equal(parseEmbedVideoUrl("https://www.streamable.com/abc12/"), "https://streamable.com/abc12");
+  for (const bad of [
+    "http://www.redgifs.com/watch/blueredfoxes",
+    "http://streamable.com/abc12",
+    "https://redgifs.com.evil.com/watch/blueredfoxes",
+    "https://evilredgifs.com/watch/blueredfoxes",
+    "https://www.redgifs.com.evil.example/watch/x1y2z3",
+    "https://streamable.com.evil.example/abc12",
+    "https://notstreamable.com/abc12",
+    "https://user@www.redgifs.com/watch/blueredfoxes",
+    "https://user:pw@streamable.com/abc12",
+    "https://www.redgifs.com:8443/watch/blueredfoxes",
+    "https://streamable.com:444/abc12",
+    "https://www.redgifs.com/",
+    "https://www.redgifs.com/users/someone",
+    "https://www.redgifs.com/watch/",
+    "https://www.redgifs.com/watch/a/b",
+    "https://www.redgifs.com/browse",
+    "https://streamable.com/",
+    "https://streamable.com/e/abc12",
+    "https://streamable.com/abc12/extra",
+    "https://youtube.com/watch?v=abcdefghijk",
+    "https://www.reddit.com/r/pics/comments/abc123/x/",
+    "ftp://streamable.com/abc12",
+    "javascript:alert(1)",
+    "not a url",
+    "",
+    null,
+    undefined,
+  ]) assert.equal(parseEmbedVideoUrl(bad), null, String(bad));
 });
 
 test("srcset chooses the largest real variant, falling back to src", () => {
@@ -272,6 +326,25 @@ test("download parameters follow the existing /download contract", () => {
     /format=mp3&async=1&format_id=audio-320$/
   );
   assert.equal(downloadParams({family: "video", format: "mp4"}, "https://example.com/not-reddit"), null);
+  // Embed posts send the validated external URL (the Reddit post URL has no usable formats).
+  assert.equal(
+    downloadParams({family: "video", format: "mp4", formatId: "hd"}, "https://www.redgifs.com/watch/blueredfoxes"),
+    "/download?url=https%3A%2F%2Fwww.redgifs.com%2Fwatch%2Fblueredfoxes&format=mp4&async=1&format_id=hd"
+  );
+  assert.equal(
+    downloadParams({family: "video", format: "mp4", formatId: "mp4"}, "https://streamable.com/abc12"),
+    "/download?url=https%3A%2F%2Fstreamable.com%2Fabc12&format=mp4&async=1&format_id=mp4"
+  );
+  for (const bad of ["http://streamable.com/abc12", "https://redgifs.com.evil.com/watch/abc", "https://streamable.com/e/abc12", "", null]) {
+    assert.equal(downloadParams({family: "video", format: "mp4", formatId: "mp4"}, bad), null, String(bad));
+  }
+});
+
+test("gallery label shows the real page count and drops it when unknown", () => {
+  assert.equal(galleryLabel(5), "⬇ Save gallery · 5");
+  assert.equal(galleryLabel(1), "⬇ Save gallery · 1");
+  assert.equal(galleryLabel("12"), "⬇ Save gallery · 12");
+  for (const none of [0, -3, NaN, null, undefined, "x"]) assert.equal(galleryLabel(none), "⬇ Save gallery", String(none));
 });
 
 test("progress text only reports measured numbers", () => {

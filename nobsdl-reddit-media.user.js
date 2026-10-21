@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NoBsDL Reddit Media Downloader
 // @namespace    https://nobsdl.com/
-// @version      1.1.0
+// @version      1.2.0
 // @description  Save Reddit images, galleries and comment images straight from the page, download Reddit videos with audio through NoBsDL, and export the comments loaded on a post to JSON, CSV or Markdown. No popups, no fake buttons.
 // @author       NoBsDL
 // @icon         https://nobsdl.com/static/images/icon-192x192.png
@@ -14,6 +14,8 @@
 // @exclude      *://embed.reddit.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM.xmlHttpRequest
+// @grant        GM_download
+// @grant        GM.download
 // @connect      nobsdl.com
 // @connect      i.redd.it
 // @connect      preview.redd.it
@@ -29,7 +31,11 @@
 // - Videos: only when you open the video panel, the canonical Reddit post URL
 //   is sent to https://nobsdl.com/api/video-info to list the real formats.
 //   Choosing a format starts the async job on NoBsDL; the panel polls its
-//   status and finally hands the finished file to the browser.
+//   status and finally hands the finished file to the browser (through your
+//   userscript manager's download function when it has one).
+// - Reddit posts that embed a RedGIFs or Streamable video: the validated
+//   RedGIFs/Streamable link of that post (not the Reddit post URL) is sent to
+//   the same endpoint, because that is the URL NoBsDL can list formats for.
 // - Comment export: runs locally and sends nothing. It reads only the comments
 //   already loaded in the page, builds JSON, CSV or Markdown in your browser
 //   and saves it as a file. It never loads more comments and uses no network.
@@ -226,7 +232,32 @@
     const image = parseRedditImageUrl(input);
     if (!image) return null;
     if (!["jpg", "png", "gif"].includes(image.ext)) return null;
+    if (image.host === "i.redd.it") return "https://i.redd.it" + image.pathname;
+    // Modern previews are /<slug>-v0-<id>.<ext>; the original lives at
+    // i.redd.it/<id>.<ext> (the slug path on i.redd.it answers 403).
+    const last = image.pathname.split("/").filter(Boolean).pop() || "";
+    const modern = last.match(/^(?:.*-)?v0-([a-z0-9]+)\.(jpe?g|png|gif)$/i);
+    if (modern) return "https://i.redd.it/" + modern[1] + "." + modern[2].toLowerCase();
     return "https://i.redd.it" + image.pathname;
+  }
+
+  // RedGIFs and Streamable posts: Reddit only shows an embed, so the external
+  // URL is what NoBsDL needs. Exact hosts, https only, no userinfo or port,
+  // and a path that is really one video. Returns the canonical URL or null.
+  function parseEmbedVideoUrl(input) {
+    let url;
+    try { url = new URL(String(input || "")); } catch (_) { return null; }
+    if (url.protocol !== "https:" || url.username || url.password || url.port) return null;
+    const host = url.hostname.toLowerCase();
+    if (host === "redgifs.com" || host === "www.redgifs.com" || host === "v3.redgifs.com") {
+      const m = url.pathname.match(/^\/watch\/([A-Za-z0-9_-]{3,64})\/?$/);
+      return m ? "https://www.redgifs.com/watch/" + m[1] : null;
+    }
+    if (host === "streamable.com" || host === "www.streamable.com") {
+      const m = url.pathname.match(/^\/([A-Za-z0-9]{3,12})\/?$/);
+      return m ? "https://streamable.com/" + m[1] : null;
+    }
+    return null;
   }
 
   function imageKey(input) {
@@ -498,10 +529,13 @@
   }
 
   function downloadParams(choice, sourceUrl) {
+    // A Reddit post URL, or the validated RedGIFs/Streamable URL of an
+    // embed post; nothing else is ever sent to /download.
     const post = parseRedditPostUrl(sourceUrl);
-    if (!post || !choice || (choice.family !== "video" && choice.family !== "audio")) return null;
+    const target = post ? post.url : parseEmbedVideoUrl(sourceUrl);
+    if (!target || !choice || (choice.family !== "video" && choice.family !== "audio")) return null;
     const params = new URLSearchParams({
-      url: post.url,
+      url: target,
       format: choice.family === "audio" ? "mp3" : "mp4",
       async: "1",
     });
@@ -656,7 +690,9 @@
       send({
         method: "GET",
         url: image.url,
-        headers: {Accept: "image/avif,image/webp,image/png,image/jpeg,image/gif,*/*;q=0.5"},
+        // Not AVIF/WebP: asking for them makes Reddit answer with a WebP preview,
+        // which some browsers open in a tab instead of saving.
+        headers: {Accept: "image/jpeg,image/png,image/gif,*/*;q=0.1"},
         responseType: "arraybuffer",
         timeout: timeout || 45000,
         onload: (response) => {
@@ -713,15 +749,15 @@
       align-items: center;
       justify-content: center;
       gap: 5px;
-      min-height: 32px;
+      min-height: 36px;
       max-width: calc(100% - 16px);
-      padding: 0 11px;
-      border: 1px solid rgba(255,255,255,.28);
-      border-radius: 9px;
-      background: rgba(9,11,17,.92);
-      box-shadow: 0 6px 22px rgba(0,0,0,.42);
-      color: #f8fafc;
-      font: 700 12px/1.2 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+      padding: 0 13px;
+      border: 1px solid rgba(255,255,255,.55);
+      border-radius: 10px;
+      background: linear-gradient(135deg,#6862f6,#497fee);
+      box-shadow: 0 8px 26px rgba(0,0,0,.5), 0 1px 3px rgba(0,0,0,.4);
+      color: #fff;
+      font: 800 13px/1.2 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
       letter-spacing: .01em;
       white-space: nowrap;
       cursor: pointer;
@@ -739,17 +775,17 @@
       min-height: 28px;
       margin: 4px 0 4px 6px;
       padding: 0 9px;
-      border: 1px solid rgba(148,163,184,.4);
+      border: 1px solid rgba(255,255,255,.55);
       border-radius: 7px;
-      background: rgba(15,23,42,.9);
-      color: #e2e8f0;
+      background: linear-gradient(135deg,#6862f6,#497fee);
+      color: #fff;
       font: 700 11px/1.2 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
       white-space: nowrap;
       vertical-align: middle;
       cursor: pointer;
       -webkit-tap-highlight-color: transparent;
     }
-    .nobsdl-reddit-comment-save:hover { background: rgba(99,102,241,.28); }
+    .nobsdl-reddit-comment-save:hover { filter: brightness(1.12); }
     .nobsdl-reddit-comment-save:focus-visible { outline: 3px solid #f8b84e; outline-offset: 2px; }
     .nobsdl-reddit-comment-save[disabled] { cursor: progress; opacity: .75; }
     @media (prefers-reduced-motion: reduce) {
@@ -1000,9 +1036,11 @@
     }
   }
 
-  function addBadge(host, label, onClick, kind) {
-    if (!host || !host.querySelector) return null;
-    if (host.querySelector(".nobsdl-reddit-badge")) return null;
+  const BADGE_SELECTOR = ".nobsdl-reddit-badge";
+  const MIN_BADGE_WIDTH = 40;
+  const BADGE_EDGE_TOLERANCE = 2;
+
+  function createBadge(label, onClick, kind) {
     const button = el("button", {
       class: "nobsdl-reddit-badge",
       type: "button",
@@ -1020,11 +1058,113 @@
       event.stopPropagation();
       onClick(button);
     });
-    try {
-      if (window.getComputedStyle(host).position === "static") host.style.position = "relative";
-    } catch (_) { /* optional */ }
-    host.append(button);
     return button;
+  }
+
+  function setBadgeLabel(badge, label) {
+    if (!badge || badge.disabled || badge.textContent === label) return;
+    badge.textContent = label;
+    badge.setAttribute("aria-label", label + " with NoBsDL");
+  }
+
+  function badgeHasBox(badge) {
+    if (!badge || !badge.getClientRects || !badge.getClientRects().length) return false;
+    const rect = badge.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  }
+
+  // A badge whose box is empty (its host is hidden, collapsed or was
+  // re-rendered) is treated as missing so a later scan can mount it again.
+  function pruneDeadBadges(root) {
+    if (!root || !root.querySelectorAll) return;
+    for (const badge of root.querySelectorAll(BADGE_SELECTOR)) {
+      if (!badgeHasBox(badge)) badge.remove();
+    }
+  }
+
+  // Shadow-hosting and inline/contents elements (Reddit's
+  // shreddit-async-loader) are not a positioning context in every browser:
+  // Firefox puts an absolutely-positioned child of an inline relative host
+  // outside the post. Those hosts are never used.
+  function hostCanHoldBadge(host) {
+    if (!host || host.nodeType !== 1 || host.shadowRoot) return false;
+    if (!host.getClientRects || !host.getClientRects().length) return false;
+    let display = "";
+    try { display = window.getComputedStyle(host).display; } catch (_) { return false; }
+    return display !== "inline" && display !== "contents" && display !== "none";
+  }
+
+  function badgeSitsInsideHost(badge, host) {
+    if (!badge.getClientRects().length) return false;
+    const box = badge.getBoundingClientRect();
+    if (box.width <= MIN_BADGE_WIDTH) return false;
+    const area = host.getBoundingClientRect();
+    const slack = BADGE_EDGE_TOLERANCE;
+    return box.left >= area.left - slack && box.top >= area.top - slack
+      && box.right <= area.right + slack && box.bottom <= area.bottom + slack;
+  }
+
+  // Mounts one badge on the first candidate host where it really shows up
+  // inside that host. Returns the new badge, or null when a live badge already
+  // exists in any candidate (no duplicates) or nothing suitable was found.
+  function mountBadge(candidates, label, onClick, kind) {
+    const hosts = [];
+    for (const host of candidates || []) {
+      if (host && host.nodeType === 1 && !hosts.includes(host)) hosts.push(host);
+    }
+    for (const host of hosts) pruneDeadBadges(host);
+    for (const host of hosts) {
+      if (host.querySelector(BADGE_SELECTOR)) return null;
+    }
+    for (const host of hosts) {
+      if (!hostCanHoldBadge(host)) continue;
+      const badge = createBadge(label, onClick, kind);
+      const previousPosition = host.style.position;
+      let positioned = false;
+      try {
+        if (window.getComputedStyle(host).position === "static") {
+          host.style.position = "relative";
+          positioned = true;
+        }
+      } catch (_) { /* optional */ }
+      host.append(badge);
+      if (badgeSitsInsideHost(badge, host)) return badge;
+      badge.remove();
+      if (positioned) host.style.position = previousPosition;
+    }
+    return null;
+  }
+
+  // Containers a post's media can live in, best first: Reddit's plain block
+  // slot container, then the aspect-ratio wrappers, then the older markers.
+  // Searched upwards from the media and downwards from the post, because
+  // Reddit does not always keep the media inside the post's own subtree.
+  const MEDIA_HOST_SELECTORS = Object.freeze([
+    '[slot="post-media-container"]',
+    '[id$="-aspect-ratio"]',
+    "shreddit-aspect-ratio",
+    '[data-testid="post-media-container"]',
+    '[data-testid="post-media"]',
+    ".media-preview",
+  ]);
+
+  function mediaHostCandidates(post, node, fallbacks) {
+    const out = [];
+    const add = (host, allowPost) => {
+      if (host && host.nodeType === 1 && !out.includes(host) && (allowPost || host !== post)) out.push(host);
+    };
+    for (const selector of MEDIA_HOST_SELECTORS) {
+      if (node && node.closest) add(node.closest(selector));
+      if (post && post.querySelector) add(post.querySelector(selector));
+    }
+    for (const host of fallbacks || []) add(host, true);
+    // Last resort: the wrappers between the media and its post, then the post.
+    // mountBadge skips inline, shadow-hosting and hidden ones.
+    if (post && node && post.contains && post.contains(node)) {
+      for (let up = node.parentElement; up && up !== post; up = up.parentElement) add(up);
+      add(post, true);
+    }
+    return out;
   }
 
   function addCommentButton(after, onClick, label) {
@@ -1077,7 +1217,54 @@
     setTimeout(() => { try { URL.revokeObjectURL(href); } catch (_) { /* gone */ } }, 60000);
   }
 
-  function saveFile(fileUrl) {
+  function gmDownloadFunction() {
+    try {
+      if (typeof GM_download === "function") return GM_download;
+    } catch (_) { /* not granted */ }
+    try {
+      if (typeof GM === "object" && GM && typeof GM.download === "function") return GM.download.bind(GM);
+    } catch (_) { /* not granted */ }
+    return null;
+  }
+
+  // The finished video file. With a userscript manager download function the
+  // Reddit tab is never navigated (a 404/409/410 would replace it with JSON)
+  // and the file gets a sane name; without one, or when it fails, the previous
+  // behaviour applies: the browser is pointed at the file URL.
+  function saveFile(fileUrl, filename) {
+    let fellBack = false;
+    const navigate = () => {
+      if (fellBack) return;
+      fellBack = true;
+      saveFileByNavigation(fileUrl);
+    };
+    const download = gmDownloadFunction();
+    if (!download) {
+      navigate();
+      return;
+    }
+    try {
+      const result = download({url: fileUrl, name: filename, saveAs: false, onerror: navigate});
+      if (result && typeof result.catch === "function") result.catch(navigate);
+    } catch (_) {
+      navigate();
+    }
+  }
+
+  function videoSaveName(status, context, choice) {
+    const wanted = choice && choice.family === "audio" ? "mp3" : "mp4";
+    const known = ["mp4", "mp3", "m4a", "webm", "mkv", "mov"];
+    const fromServer = String((status && status.filename) || "").split(/[\\/]/).pop();
+    const parts = /^(.*?)(?:\.([A-Za-z0-9]{2,4}))?$/.exec(fromServer || "");
+    const serverBase = cleanFilenameBase(parts ? parts[1] : "");
+    const serverExt = parts && parts[2] ? parts[2].toLowerCase() : "";
+    const base = serverBase
+      || cleanFilenameBase(cleanPostTitle(context && context.title))
+      || "reddit-video";
+    return base + "." + (known.includes(serverExt) ? serverExt : wanted);
+  }
+
+  function saveFileByNavigation(fileUrl) {
     const anchor = el("a", {href: fileUrl});
     anchor.style.display = "none";
     anchor.rel = "noopener noreferrer";
@@ -1294,9 +1481,13 @@
             ? "In-page video downloads need a userscript manager with GM_xmlhttpRequest."
             : "Saving images in the page needs a userscript manager with GM_xmlhttpRequest.",
         }),
-        el("p", {class: "hint", text: "You can still open this post on NoBsDL and download it there."}),
+        context.sourceUrl
+          ? el("p", {class: "hint", text: "You can still paste this video link into NoBsDL: " + context.sourceUrl})
+          : el("p", {class: "hint", text: "You can still open this post on NoBsDL and download it there."}),
         el("div", {class: "row"}, [
-          externalLink(openOnNoBsdlUrl(context.postUrl), "Open post on NoBsDL ↗", "btn"),
+          context.sourceUrl
+            ? externalLink(NOBSDL_ORIGIN + "/", "Open NoBsDL ↗", "btn")
+            : externalLink(openOnNoBsdlUrl(context.postUrl), "Open post on NoBsDL ↗", "btn"),
         ]),
       ],
       foot: [el("span", {text: "No request was made from this page."})],
@@ -1307,8 +1498,10 @@
   function videoFooter(context) {
     return [
       el("span", {text: "MP4 video and audio are prepared by NoBsDL."}),
-      externalLink(openOnNoBsdlUrl(context.postUrl), "Open post on NoBsDL ↗", ""),
-    ];
+      // The NoBsDL Reddit page cannot list formats for an embedded
+      // RedGIFs/Streamable video, so no link is offered for those.
+      context.sourceUrl ? null : externalLink(openOnNoBsdlUrl(context.postUrl), "Open post on NoBsDL ↗", ""),
+    ].filter(Boolean);
   }
 
   function loadVideoFormats(context) {
@@ -1328,7 +1521,7 @@
       foot: videoFooter(context),
     });
     state.open = true;
-    apiGet("/api/video-info?url=" + encodeURIComponent(context.postUrl) + "&intent=mp4", 60000)
+    apiGet("/api/video-info?url=" + encodeURIComponent(context.sourceUrl || context.postUrl) + "&intent=mp4", 60000)
       .then((data) => {
         if (token !== state.token || !state.context || state.context.key !== context.key) return;
         const info = normalizeRedditChoices(data);
@@ -1456,7 +1649,7 @@
               else loadVideoFormats(context);
             },
           }),
-          externalLink(openOnNoBsdlUrl(context.postUrl), "Open post on NoBsDL ↗", "btn btn-ghost"),
+          context.sourceUrl ? null : externalLink(openOnNoBsdlUrl(context.postUrl), "Open post on NoBsDL ↗", "btn btn-ghost"),
         ]),
       ],
       foot: videoFooter(context),
@@ -1469,7 +1662,7 @@
       toast("A NoBsDL download is already running. Wait for it to finish.", "error");
       return;
     }
-    const params = downloadParams(choice, context.postUrl);
+    const params = downloadParams(choice, context.sourceUrl || context.postUrl);
     if (!params) {
       toast("This Reddit post link couldn't be read.", "error");
       return;
@@ -1545,7 +1738,7 @@
           phase = "ready";
           render();
           state.busy = false;
-          saveFile(fileUrl);
+          saveFile(fileUrl, videoSaveName(status, context, choice));
           toast("File ready — your browser is saving it.", "ok");
           showVideoResult(context, choice);
           return;
@@ -1680,6 +1873,10 @@
     return el.closest && el.closest("gallery-carousel, shreddit-gallery-carousel, [data-testid='gallery-carousel']");
   }
 
+  // Per page: every Reddit image URL found anywhere in the page node (the
+  // preview <img>, a zoomable-img <img>, a link). An i.redd.it URL is the
+  // original file and wins over preview.redd.it, which only serves resized
+  // (often WebP) previews.
   function galleryItems(gallery) {
     if (!gallery) return [];
     const pageNodes = Array.from(gallery.querySelectorAll('[slot^="page-"]'));
@@ -1690,12 +1887,23 @@
     const images = [];
     nodes.forEach((node, index) => {
       const pageMatch = /^page-(\d+)$/i.exec(node.getAttribute("slot") || "");
-      const img = node.tagName === "IMG" ? node : node.querySelector("img");
-      const anchor = node.tagName === "A" ? node : node.querySelector("a[href]");
-      const src = img ? bestImageVariant(img.getAttribute("src"), img.getAttribute("srcset"), document.baseURI) : "";
-      const href = anchor ? anchor.getAttribute("href") : "";
-      const url = isRedditImageUrl(src) ? src : isRedditImageUrl(href, document.baseURI) ? href : "";
+      const imgs = node.tagName === "IMG" ? [node] : Array.from(node.querySelectorAll("img"));
+      const anchors = node.tagName === "A" ? [node] : Array.from(node.querySelectorAll("a[href]"));
+      const found = [];
+      for (const img of imgs) {
+        found.push(bestImageVariant(img.getAttribute("src"), img.getAttribute("srcset"), document.baseURI));
+      }
+      for (const anchor of anchors) {
+        try { found.push(new URL(anchor.getAttribute("href") || "", document.baseURI).href); } catch (_) { /* skip */ }
+      }
+      const valid = found.filter((candidate) => candidate && isRedditImageUrl(candidate));
+      const original = valid.find((candidate) => {
+        const parsed = parseRedditImageUrl(candidate);
+        return parsed && parsed.host === "i.redd.it";
+      });
+      const url = original || valid[0] || "";
       if (!url) return;
+      const img = imgs[0] || null;
       images.push({
         url,
         alt: img ? img.getAttribute("alt") || "" : "",
@@ -1703,6 +1911,17 @@
       });
     });
     return galleryItemsFromImages(images);
+  }
+
+  function galleryPageCount(gallery) {
+    if (!gallery) return 0;
+    const pages = gallery.querySelectorAll('[slot^="page-"]').length;
+    return pages || galleryItems(gallery).length;
+  }
+
+  function galleryLabel(count) {
+    const n = Math.max(0, Math.floor(Number(count) || 0));
+    return "⬇ Save gallery" + (n ? " · " + n : "");
   }
 
   function nearestComment(node) {
@@ -1737,18 +1956,50 @@
     return width >= 300 && height >= 200;
   }
 
+  // Ads are never touched: promoted posts, the promoted video on a post page
+  // and feed ad cards.
+  const AD_SELECTOR = 'shreddit-comments-page-ad, shreddit-ad-post, [slot="expanded-video-player"]';
+  const GALLERY_SELECTOR = "gallery-carousel, shreddit-gallery-carousel, [data-testid='gallery-carousel']";
+
+  function isPromotedPost(post) {
+    if (!post || !post.hasAttribute || !post.hasAttribute("promoted")) return false;
+    return !/^(?:false|0)$/i.test(String(post.getAttribute("promoted") || "").trim());
+  }
+
+  function inAd(node) {
+    if (!node || !node.closest) return false;
+    if (node.closest(AD_SELECTOR)) return true;
+    return isPromotedPost(node.closest(POST_SELECTOR));
+  }
+
+  const galleryBadges = new WeakMap();
+  const badgeGalleries = new WeakMap();
+
   function processGallery(gallery) {
-    if (!gallery || gallery.dataset.nobsdlReddit === "gallery") return;
+    if (!gallery || inAd(gallery)) return;
+    const label = galleryLabel(galleryPageCount(gallery));
+    const known = galleryBadges.get(gallery);
+    if (known) {
+      if (known.isConnected && badgeHasBox(known)) {
+        setBadgeLabel(known, label);
+        return;
+      }
+      known.remove();
+      galleryBadges.delete(gallery);
+    }
     const context = postContextFor(gallery, {allowPage: true});
     if (!context) return;
-    gallery.dataset.nobsdlReddit = "gallery";
-    const initial = galleryItems(gallery);
-    const host = gallery.closest("shreddit-aspect-ratio") || gallery.parentElement || gallery;
-    const badge = addBadge(
-      host,
-      "⬇ Gallery" + (initial.length ? " · " + initial.length : ""),
-      () => {
-        const items = galleryItems(gallery);
+    const post = context.post || gallery.closest(POST_SELECTOR);
+    const candidates = mediaHostCandidates(post, gallery, [gallery.parentElement, gallery]);
+    const badge = mountBadge(
+      candidates,
+      label,
+      (button) => {
+        let live = badgeGalleries.get(button) || gallery;
+        if (!live.isConnected && context.post && context.post.querySelector) {
+          live = context.post.querySelector(GALLERY_SELECTOR) || live;
+        }
+        const items = galleryItems(live);
         if (!items.length) {
           toast("No Reddit gallery images were found in this post.", "error");
           return;
@@ -1763,11 +2014,30 @@
       },
       "gallery"
     );
-    if (badge) host.dataset.nobsdlReddit = "gallery";
+    if (badge) {
+      galleryBadges.set(gallery, badge);
+      badgeGalleries.set(badge, gallery);
+      gallery.dataset.nobsdlReddit = "gallery";
+      if (badge.parentElement) badge.parentElement.dataset.nobsdlReddit = "gallery";
+      return;
+    }
+    // A live badge from an earlier render of this gallery is adopted so its
+    // label keeps following the real page count.
+    for (const host of candidates) {
+      const existing = host.querySelector(BADGE_SELECTOR + "[data-nobsdl-kind='gallery']");
+      if (existing) {
+        galleryBadges.set(gallery, existing);
+        badgeGalleries.set(existing, gallery);
+        setBadgeLabel(existing, label);
+        return;
+      }
+    }
   }
 
   function videoBadgeExists(marker) {
-    return Boolean(marker && marker.querySelector && marker.querySelector(VIDEO_BADGE_SELECTOR));
+    if (!marker || !marker.querySelector) return false;
+    pruneDeadBadges(marker);
+    return Boolean(marker.querySelector(VIDEO_BADGE_SELECTOR));
   }
 
   function clearStaleVideoBadges(root, postUrl) {
@@ -1775,12 +2045,6 @@
     for (const badge of root.querySelectorAll(VIDEO_BADGE_SELECTOR)) {
       if (badge.dataset.nobsdlPost && badge.dataset.nobsdlPost !== postUrl) badge.remove();
     }
-  }
-
-  function nodeIsVisible(node) {
-    if (!node || node.nodeType !== 1) return false;
-    const rect = node.getBoundingClientRect();
-    return rect.width > 0 && rect.height > 0 && node.getClientRects().length > 0;
   }
 
   function videoScopeFor(post) {
@@ -1791,28 +2055,34 @@
     return post;
   }
 
-  // Reddit uses different wrappers per surface: a player page has
-  // shreddit-async-loader, cards have shreddit-aspect-ratio, and compact view
-  // keeps the player in a hidden subtree. Pick the first visible container so
-  // the badge is never appended to a 0x0 host.
-  function videoHostFor(media, post) {
-    const candidates = [];
-    const aspect = media.closest && media.closest("shreddit-aspect-ratio");
-    if (aspect) candidates.push(aspect);
-    const container = media.closest && media.closest("[slot='post-media-container'], [data-testid='post-media-container']");
-    if (container) candidates.push(container);
-    if (media !== post && media.parentElement) candidates.push(media.parentElement);
+  // RedGIFs/Streamable link posts: the external video URL, read from the
+  // post's own content-href (present even while an 18+ blur hides the embed).
+  function embedSourceFor(post) {
+    if (!post || !post.getAttribute) return null;
+    return parseEmbedVideoUrl(post.getAttribute("content-href"));
+  }
+
+  function withEmbedSource(context) {
+    if (!context || !context.post) return context;
+    const source = embedSourceFor(context.post);
+    if (source) context.sourceUrl = source;
+    return context;
+  }
+
+  // Reddit uses different wrappers per surface: the plain block
+  // post-media-container slot, aspect-ratio wrappers, a hidden subtree in
+  // compact view. mountBadge only uses a host where the badge really shows.
+  function videoHostCandidates(media, post) {
+    const fallbacks = [];
+    if (media && media !== post && media.parentElement) fallbacks.push(media.parentElement);
     // A shreddit-post can have its own shadow root: an unslotted light-DOM
     // child is not rendered (0x0). Its article wrapper is the safe visible
     // surface in compact view, but only when it belongs to this post.
     const scope = videoScopeFor(post);
-    if (scope && scope !== post) candidates.push(scope);
-    if (post) candidates.push(post);
-    if (media) candidates.push(media);
-    for (const candidate of candidates) {
-      if (nodeIsVisible(candidate)) return candidate;
-    }
-    return post || media;
+    if (scope && scope !== post) fallbacks.push(scope);
+    if (post) fallbacks.push(post);
+    if (media) fallbacks.push(media);
+    return mediaHostCandidates(post, media, fallbacks);
   }
 
   function openVideoPanel(context) {
@@ -1820,58 +2090,64 @@
       kind: "video",
       key: "v:" + context.url,
       postUrl: context.url,
+      sourceUrl: context.sourceUrl || "",
       title: postTitleFor(context.post) || context.title,
     });
   }
 
-  function processVideo(player) {
-    if (!player || nearestComment(player)) return;
-    const post = player.closest && player.closest(POST_SELECTOR);
-    const context = postContextFor(player, {allowPage: true});
-    if (!context) return;
+  function mountVideoBadge(context, media, post) {
     if (post) {
       const scope = videoScopeFor(post);
       clearStaleVideoBadges(scope, context.url);
-      if (videoBadgeExists(scope)) return;
+      if (videoBadgeExists(scope)) return null;
     }
-    const host = videoHostFor(player, post);
-    if (!host) return;
-    clearStaleVideoBadges(host, context.url);
-    if (videoBadgeExists(host)) return;
-    const badge = addBadge(host, "⬇ Video", () => openVideoPanel(context), "video");
+    const candidates = videoHostCandidates(media, post);
+    for (const host of candidates) {
+      clearStaleVideoBadges(host, context.url);
+      if (videoBadgeExists(host)) return null;
+    }
+    const badge = mountBadge(candidates, "⬇ Download video", () => openVideoPanel(context), "video");
     if (badge) {
       badge.dataset.nobsdlPost = context.url;
-      if (host !== post) host.dataset.nobsdlReddit = "video";
+      if (badge.parentElement && badge.parentElement !== post) badge.parentElement.dataset.nobsdlReddit = "video";
     }
+    return badge;
+  }
+
+  function processVideo(player) {
+    if (!player || nearestComment(player) || inAd(player)) return;
+    const post = player.closest && player.closest(POST_SELECTOR);
+    const context = withEmbedSource(postContextFor(player, {allowPage: true}));
+    if (!context) return;
+    mountVideoBadge(context, player, post);
+  }
+
+  // Link posts that embed a RedGIFs or Streamable video. Reddit renders them
+  // as shreddit-embed (sometimes behind a blur) and has no player of its own.
+  function processEmbedPost(post) {
+    if (!post || nearestComment(post) || inAd(post)) return;
+    if (!embedSourceFor(post)) return;
+    const context = withEmbedSource(postContextFor(post, {allowPage: true}));
+    if (!context || !context.sourceUrl) return;
+    mountVideoBadge(context, post, post);
   }
 
   // Compact/card feeds can keep the real player in a hidden subtree, and some
   // video posts temporarily have no player at all. The post itself is then the
   // visible control surface; the canonical post URL is still known.
   function processVideoPostFallback(post) {
-    if (!post || nearestComment(post)) return;
+    if (!post || nearestComment(post) || inAd(post)) return;
     if (String(post.getAttribute("post-type") || "").toLowerCase() !== "video") return;
     // A real player/native video is handled by processVideo/processNativeVideo;
     // this fallback exists for compact or temporarily player-less posts.
     if (post.querySelector(VIDEO_PLAYER_SELECTOR + ", video")) return;
-    const context = postContextFor(post, {allowPage: true});
+    const context = withEmbedSource(postContextFor(post, {allowPage: true}));
     if (!context) return;
-    const scope = videoScopeFor(post);
-    clearStaleVideoBadges(scope, context.url);
-    if (videoBadgeExists(scope)) return;
-    const host = videoHostFor(post, post);
-    if (!host) return;
-    clearStaleVideoBadges(host, context.url);
-    if (videoBadgeExists(host)) return;
-    const badge = addBadge(host, "⬇ Video", () => openVideoPanel(context), "video");
-    if (badge) {
-      badge.dataset.nobsdlPost = context.url;
-      host.dataset.nobsdlReddit = "video";
-    }
+    mountVideoBadge(context, post, post);
   }
 
   function processNativeVideo(video) {
-    if (!video || video.closest(VIDEO_PLAYER_SELECTOR) || nearestComment(video)) return;
+    if (!video || video.closest(VIDEO_PLAYER_SELECTOR) || nearestComment(video) || inAd(video)) return;
     const post = video.closest && video.closest(POST_SELECTOR);
     const postType = post ? String(post.getAttribute("post-type") || "").toLowerCase() : "";
     const mediaContainer = video.closest && video.closest(
@@ -1881,44 +2157,29 @@
     if (!post && !mediaContainer) return;
     if (post && postType !== "video"
       && !video.closest("[slot='post-media-container'], [data-testid='post-media-container'], shreddit-aspect-ratio")) return;
-    const context = postContextFor(video, {allowPage: true});
+    const context = withEmbedSource(postContextFor(video, {allowPage: true}));
     if (!context) return;
-    if (post) {
-      const scope = videoScopeFor(post);
-      clearStaleVideoBadges(scope, context.url);
-      if (videoBadgeExists(scope)) return;
-    }
-    const host = videoHostFor(video, post);
-    if (!host) return;
-    clearStaleVideoBadges(host, context.url);
-    if (videoBadgeExists(host)) return;
-    const badge = addBadge(host, "⬇ Video", () => openVideoPanel(context), "video");
-    if (badge) {
-      badge.dataset.nobsdlPost = context.url;
-      if (host !== post) host.dataset.nobsdlReddit = "video";
-    }
+    mountVideoBadge(context, video, post);
   }
 
   function processImage(img) {
-    if (!img || img.dataset.nobsdlReddit === "image") return;
+    if (!img || inAd(img)) return;
     if (nearestComment(img) || galleryRootFor(img)) return;
     if (img.closest(VIDEO_PLAYER_SELECTOR)) return;
     const post = img.closest(POST_SELECTOR);
     if (!post) return;
     if (String(post.getAttribute("post-type") || "").toLowerCase() === "video") return;
+    if (embedSourceFor(post)) return;
+    pruneDeadBadges(post);
+    if (post.querySelector(BADGE_SELECTOR)) return;
     const src = bestImageVariant(img.getAttribute("src"), img.getAttribute("srcset"), document.baseURI);
     if (!isRedditImageUrl(src)) return;
     if (!isContentImage(img, src)) return;
     const context = postContextFor(img, {allowPage: false});
     if (!context) return;
 
-    let host = img.closest("[slot='post-media-container'], [data-testid='post-media-container'], shreddit-aspect-ratio, [data-testid='post-media'], .media-preview");
-    if (!host || host === post) host = img.parentElement;
-    if (!host || host.dataset.nobsdlReddit === "image") return;
-    if (host.querySelector(".nobsdl-reddit-badge")) return;
-
     const title = postTitleFor(post) || cleanPostTitle(img.getAttribute("alt") || "");
-    const badge = addBadge(host, "⬇ Save image", (button) => {
+    const badge = mountBadge(mediaHostCandidates(post, img, [img.parentElement]), "⬇ Save image", (button) => {
       const current = bestImageVariant(img.getAttribute("src"), img.getAttribute("srcset"), document.baseURI);
       const parsed = parseRedditImageUrl(isRedditImageUrl(current) ? current : src);
       if (!parsed) {
@@ -1938,7 +2199,7 @@
         }
       });
     }, "image");
-    if (badge) host.dataset.nobsdlReddit = "image";
+    if (badge && badge.parentElement) badge.parentElement.dataset.nobsdlReddit = "image";
   }
 
   function saveCommentImage(button, url, title) {
@@ -2471,6 +2732,19 @@
         .replace(/>/g, "&gt;");
     }
 
+    // Only Reddit permalinks become Markdown links, and characters that
+    // would end or break the link syntax are percent-encoded.
+    function markdownLinkUrl(value) {
+      const url = String(value == null ? "" : value).trim();
+      if (!url.startsWith("https://www.reddit.com/")) return "";
+      return url
+        .replace(/\s/g, (space) => encodeURIComponent(space))
+        .replace(/\(/g, "%28")
+        .replace(/\)/g, "%29")
+        .replace(/</g, "%3C")
+        .replace(/>/g, "%3E");
+    }
+
     function authorLabel(value) {
       const author = cleanText(value);
       if (!author) return "[unknown]";
@@ -2505,7 +2779,8 @@
         if (comment.is_submitter) meta.push("OP");
         let line = indent + "- **" + markdownEscape(authorLabel(comment.author)) + "**";
         if (meta.length) line += " · " + meta.join(" · ");
-        if (comment.permalink) line += " · [link](" + comment.permalink + ")";
+        const link = markdownLinkUrl(comment.permalink);
+        if (link) line += " · [link](" + link + ")";
         lines.push(line);
         const body = comment.body ? markdownEscape(comment.body) : "_[no text]_";
         for (const bodyLine of body.split("\n")) lines.push(indent + "  > " + bodyLine);
@@ -2808,6 +3083,7 @@
       csvValue,
       commentsToCsv,
       markdownEscape,
+      markdownLinkUrl,
       authorLabel,
       formatDate,
       commentsToMarkdown,
@@ -2817,10 +3093,21 @@
   // ── End comment export ─────────────────────────────────────────────────
 
   // ── Scanning ───────────────────────────────────────────────────────────
+  const SCAN_DEBOUNCE_MS = 180;
+  const SCAN_MAX_WAIT_MS = 1000;
   let scanTimer = 0;
+  let scanQueuedAt = 0;
+  // Debounced, but never starved: during continuous DOM mutation (infinite
+  // scroll) a scan still runs at least every SCAN_MAX_WAIT_MS.
   function scheduleScan() {
+    const now = Date.now();
+    if (!scanQueuedAt) scanQueuedAt = now;
     clearTimeout(scanTimer);
-    scanTimer = setTimeout(scan, 180);
+    const wait = Math.max(0, Math.min(SCAN_DEBOUNCE_MS, scanQueuedAt + SCAN_MAX_WAIT_MS - now));
+    scanTimer = setTimeout(() => {
+      scanQueuedAt = 0;
+      scan();
+    }, wait);
   }
 
   function scan() {
@@ -2829,7 +3116,8 @@
       lastHref = location.href;
       if (state.open && !state.busy) closePanel();
     }
-    document.querySelectorAll("gallery-carousel, shreddit-gallery-carousel, [data-testid='gallery-carousel']").forEach(processGallery);
+    document.querySelectorAll(GALLERY_SELECTOR).forEach(processGallery);
+    document.querySelectorAll("shreddit-post[content-href], [data-testid='post-container'][content-href]").forEach(processEmbedPost);
     document.querySelectorAll(VIDEO_PLAYER_SELECTOR).forEach(processVideo);
     document.querySelectorAll("shreddit-post[post-type='video'], [data-testid='post-container'][post-type='video']").forEach(processVideoPostFallback);
     document.querySelectorAll("shreddit-post video, [data-testid='post-container'] video").forEach(processNativeVideo);
@@ -2886,6 +3174,8 @@
     parseRedditImageUrl,
     isRedditImageUrl,
     originalImageUrl,
+    parseEmbedVideoUrl,
+    galleryLabel,
     imageKey,
     srcsetCandidates,
     bestImageVariant,
