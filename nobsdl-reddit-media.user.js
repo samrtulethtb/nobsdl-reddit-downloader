@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NoBsDL Reddit Media Downloader
 // @namespace    https://nobsdl.com/
-// @version      1.2.2
+// @version      1.2.3
 // @description  Save Reddit images, galleries and comment images straight from the page, download Reddit videos with audio through NoBsDL, and export the comments loaded on a post to JSON, CSV or Markdown. No popups, no fake buttons.
 // @author       NoBsDL
 // @icon         https://nobsdl.com/static/images/icon-192x192.png
@@ -14,8 +14,6 @@
 // @exclude      *://embed.reddit.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM.xmlHttpRequest
-// @grant        GM_download
-// @grant        GM.download
 // @connect      nobsdl.com
 // @connect      i.redd.it
 // @connect      preview.redd.it
@@ -1226,61 +1224,16 @@
     setTimeout(() => { try { URL.revokeObjectURL(href); } catch (_) { /* gone */ } }, 60000);
   }
 
-  function gmDownloadFunction() {
-    try {
-      if (typeof GM_download === "function") return GM_download;
-    } catch (_) { /* not granted */ }
-    try {
-      if (typeof GM === "object" && GM && typeof GM.download === "function") return GM.download.bind(GM);
-    } catch (_) { /* not granted */ }
-    return null;
-  }
-
-  // The finished video file. With a userscript manager download function the
-  // Reddit tab is never navigated (a 404/409/410 would replace it with JSON)
-  // and the file gets a sane name; without one, or when it fails, the previous
-  // behaviour applies: the browser is pointed at the file URL.
-  function saveFile(fileUrl, filename) {
-    let fellBack = false;
-    const navigate = () => {
-      if (fellBack) return;
-      fellBack = true;
-      saveFileByNavigation(fileUrl);
-    };
-    const download = gmDownloadFunction();
-    if (!download) {
-      navigate();
-      return;
-    }
-    try {
-      const result = download({url: fileUrl, name: filename, saveAs: false, onerror: navigate});
-      if (result && typeof result.catch === "function") result.catch(navigate);
-    } catch (_) {
-      navigate();
-    }
-  }
-
-  function videoSaveName(status, context, choice) {
-    const wanted = choice && choice.family === "audio" ? "mp3" : "mp4";
-    const known = ["mp4", "mp3", "m4a", "webm", "mkv", "mov"];
-    const fromServer = String((status && status.filename) || "").split(/[\\/]/).pop();
-    const parts = /^(.*?)(?:\.([A-Za-z0-9]{2,4}))?$/.exec(fromServer || "");
-    const serverBase = cleanFilenameBase(parts ? parts[1] : "");
-    const serverExt = parts && parts[2] ? parts[2].toLowerCase() : "";
-    const base = serverBase
-      || cleanFilenameBase(cleanPostTitle(context && context.title))
-      || "reddit-video";
-    return base + "." + (known.includes(serverExt) ? serverExt : wanted);
-  }
-
-  function saveFileByNavigation(fileUrl) {
+  // The finished video file goes through the browser's own download handling,
+  // exactly like images (owner 2026-10-21: the browser's "always ask where to
+  // save" setting must apply to videos too). The anchor is clicked without
+  // being put in the page, so Reddit's router never sees it; the server sends
+  // the file as an attachment, so the Reddit tab stays where it is.
+  function saveFile(fileUrl) {
     const anchor = el("a", {href: fileUrl});
-    anchor.style.display = "none";
     anchor.rel = "noopener noreferrer";
     anchor.referrerPolicy = "no-referrer";
-    document.documentElement.append(anchor);
     anchor.click();
-    anchor.remove();
   }
 
   // ── Images and galleries ───────────────────────────────────────────────
@@ -1747,7 +1700,7 @@
           phase = "ready";
           render();
           state.busy = false;
-          saveFile(fileUrl, videoSaveName(status, context, choice));
+          saveFile(fileUrl);
           toast("File ready — your browser is saving it.", "ok");
           showVideoResult(context, choice);
           return;
@@ -2154,9 +2107,39 @@
 
   // Link posts that embed a RedGIFs or Streamable video. Reddit renders them
   // as shreddit-embed (sometimes behind a blur) and has no player of its own.
+  // RedGIFs is adult content: NSFWDL (https://nsfwdl.com, the adult video
+  // downloader) handles it, not NoBsDL (owner 2026-10-21). Its downloader
+  // pages read #url=<link> on load and start that link themselves.
+  const NSFWDL_REDGIFS_PAGE = "https://nsfwdl.com/redgifs-downloader";
+
+  function nsfwdlUrlFor(source) {
+    return NSFWDL_REDGIFS_PAGE + "#url=" + encodeURIComponent(source);
+  }
+
+  function isRedgifsSource(source) {
+    return /^https:\/\/www\.redgifs\.com\/watch\//.test(String(source || ""));
+  }
+
   function processEmbedPost(post) {
     if (!post || nearestComment(post) || inAd(post)) return;
-    if (!embedSourceFor(post)) return;
+    const source = embedSourceFor(post);
+    if (!source) return;
+    if (isRedgifsSource(source)) {
+      dropFallbackBadge(post);
+      pruneDeadBadges(post);
+      if (post.querySelector(BADGE_SELECTOR)) return;
+      const scope = videoScopeFor(post);
+      if (scope && scope !== post && scope.querySelector(BADGE_SELECTOR)) return;
+      const badge = mountBadge(videoHostCandidates(post, post), "⬇ Download on NSFWDL", () => {
+        // A new tab only because the user clicked; nothing opens on its own.
+        window.open(nsfwdlUrlFor(source), "_blank", "noopener,noreferrer");
+      }, "nsfwdl");
+      if (badge) {
+        badge.title = "Opens NSFWDL (adult video downloader) in a new tab";
+        badge.setAttribute("aria-label", "Download this RedGIFs video on NSFWDL (opens a new tab)");
+      }
+      return;
+    }
     const context = withEmbedSource(postContextFor(post, {allowPage: true}));
     if (!context || !context.sourceUrl) return;
     mountVideoBadge(context, post, post);

@@ -37,8 +37,7 @@ redirects. No fake download buttons. Just download.**
 
 ## Install
 
-1. Install a userscript manager that provides `GM_xmlhttpRequest` (and,
-   preferably, `GM_download`), such as
+1. Install a userscript manager that provides `GM_xmlhttpRequest`, such as
    [Tampermonkey](https://www.tampermonkey.net/) or
    [Violentmonkey](https://violentmonkey.github.io/).
 2. Add `nobsdl-reddit-media.user.js`:
@@ -62,7 +61,9 @@ together so it can be installed and reviewed on its own.
 | Single image post (`shreddit-post` with a Reddit-hosted image) | `⬇ Save image` badge on the media | Saves the largest real variant discoverable in the page, preferring the original `i.redd.it` file | `i.redd.it`, then `preview.redd.it` as fallback |
 | Gallery (`gallery-carousel` with `page-N` images) | `⬇ Save gallery · N` badge | Opens a panel listing every Reddit-hosted page found; Save saves one image, Save all (.zip) downloads one local ZIP | `i.redd.it` / `preview.redd.it` only |
 | Video post (`shreddit-player`, `shreddit-player-2`, `shreddit-video-player`, or a native `<video>` in a video post) | `⬇ Download video` badge | Opens the NoBsDL format panel and runs the async download flow | `nobsdl.com` only after the panel is opened |
-| Link post embedding a RedGIFs or Streamable video (`content-href` is `https://www.redgifs.com/watch/<id>` or `https://streamable.com/<id>`) | `⬇ Download video` badge | Same panel; the external URL (not the Reddit post URL) is what NoBsDL is asked about | `nobsdl.com` only after the panel is opened |
+| Link post embedding a Streamable video (`content-href` is `https://streamable.com/<id>`) | `⬇ Download video` badge | Same panel; the external URL (not the Reddit post URL) is what NoBsDL is asked about | `nobsdl.com` only after the panel is opened |
+| Link post embedding a RedGIFs video (`content-href` is `https://www.redgifs.com/watch/<id>` or `/ifr/<id>`) | `⬇ Download on NSFWDL` badge | Opens `https://nsfwdl.com/redgifs-downloader#url=<RedGIFs link>` in a new tab, only on click. NSFWDL is the adult video downloader; its page reads the link and starts it | Nothing from the script; the new tab loads nsfwdl.com |
+| GIF post (`content-href` is an `i.redd.it/….gif`) | `⬇ Save GIF` badge | Saves the original `.gif` | `i.redd.it` only |
 | Comment image (Reddit-hosted image link or embedded image in `shreddit-comment`) | Inline `⬇ Save image` button | Saves that comment image | `i.redd.it` / `preview.redd.it` only |
 
 Reddit's own promoted content (`shreddit-ad-post`, `shreddit-comments-page-ad`,
@@ -84,11 +85,9 @@ the script cannot invent it.
   `.jpg`.
 - Unsafe characters are removed and names are capped at roughly 120
   characters.
-- Video file names: when the userscript manager provides `GM_download` /
-  `GM.download`, the script passes the (sanitized) `filename` from NoBsDL's job
-  status, or a title-based name if there is none. Without it, or if it fails,
-  the browser is pointed at the file URL and uses NoBsDL's `Content-Disposition`
-  name.
+- Video file names come from NoBsDL's `Content-Disposition` header: the
+  browser downloads the file itself, so its own "ask where to save" setting
+  applies to videos exactly as it does to images.
 
 ## Comment export
 
@@ -142,6 +141,20 @@ time. Collapsed comments are exported if their element exists. Deleted and
 removed comments are exported as Reddit displays them, with `is_deleted` /
 `is_removed` flags.
 
+## 1.2.3 changes
+
+- RedGIFs posts get **Download on NSFWDL** instead of the NoBsDL panel (owner
+  decision, 2026-10-21): NSFWDL (`nsfwdl.com`) is the adult video downloader.
+  The click opens `nsfwdl.com/redgifs-downloader#url=<RedGIFs link>` in a new
+  tab; that page fills in the link and starts it. Checked live in Firefox and
+  Chrome. Streamable posts still use NoBsDL.
+- Video files are downloaded by the browser itself again, like images, so the
+  browser's "always ask where to save" setting applies to both. `GM_download`
+  (1.2.0-1.2.2) saved videos without asking even when the browser is set to
+  ask; its `@grant` lines are removed. The download link is clicked without
+  being added to the page, so Reddit's router never sees it, and the Reddit tab
+  stays put because NoBsDL sends the file as an attachment.
+
 ## 1.2.2 fixes
 
 Checked on live Reddit on 2026-10-21 in Firefox and Chrome, including NSFW
@@ -185,8 +198,8 @@ is covered by the live-structure fixtures:
   `content-href`; NoBsDL is asked about the external URL because the Reddit
   post URL only yields an entry `/download` rejects.
 - **Image save fetched a small WebP preview:** see Images and galleries below.
-- **Video save navigated the Reddit tab** to the file URL: `GM_download` is used
-  when available.
+- **Video save navigated the Reddit tab** to the file URL: `GM_download` was
+  used when available (replaced in 1.2.3 by the browser's own download).
 - **Gallery count stuck at "· 1" in feeds:** the label follows the real number
   of `page-N` nodes on every scan.
 - **Scan starvation under infinite scroll:** scans now run at least about once
@@ -419,7 +432,7 @@ container, is the topmost element at its centre, and that no badge appears in
 an ad; that embed posts ask `/api/video-info` and `/download` about the
 external URL; that the gallery label follows hydration; that image saves use
 the derived `i.redd.it` original with the non-WebP `Accept` header; that video
-files go through `GM_download` (and fall back on its error); and that scans keep
+files are downloaded by the browser itself (1.2.3); and that scans keep
 running during continuous DOM mutation.
 
 The comment-export browser suite covers the button and its count (duplicate

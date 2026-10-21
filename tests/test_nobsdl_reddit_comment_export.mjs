@@ -138,7 +138,7 @@ function parseCsv(text) {
 
 test("merged metadata announces comment export and keeps the media permissions", () => {
   const header = source.slice(0, source.indexOf("// ==/UserScript=="));
-  assert.match(header, /^\/\/ @version\s+1\.2\.2$/m);
+  assert.match(header, /^\/\/ @version\s+1\.2\.3$/m);
   const description = header.match(/^\/\/ @description\s+(.*)$/m)[1];
   assert.match(description, /comments/i);
   assert.match(description, /JSON, CSV or Markdown/);
@@ -148,7 +148,7 @@ test("merged metadata announces comment export and keeps the media permissions",
   assert.deepEqual([...header.matchAll(/^\/\/ @namespace\s+(.*)$/gm)].map((m) => m[1]), ["https://nobsdl.com/"]);
   // The comment export adds no grant and no connect host of its own; the
   // only extra grants are the manager download function used for video files.
-  assert.deepEqual([...header.matchAll(/^\/\/ @grant\s+(\S+)$/gm)].map((m) => m[1]).sort(), ["GM.download", "GM.xmlHttpRequest", "GM_download", "GM_xmlhttpRequest"]);
+  assert.deepEqual([...header.matchAll(/^\/\/ @grant\s+(\S+)$/gm)].map((m) => m[1]).sort(), ["GM.xmlHttpRequest", "GM_xmlhttpRequest"]);
   assert.deepEqual([...header.matchAll(/^\/\/ @connect\s+(\S+)$/gm)].map((m) => m[1]).sort(), ["i.redd.it", "nobsdl.com", "preview.redd.it"]);
   // The "what this script sends" header states that comment export sends nothing.
   const preamble = source.slice(0, source.indexOf("(function () {"));

@@ -41,7 +41,7 @@ test("metadata is least-privilege and Reddit-only", () => {
   const matches = [...header.matchAll(/^\/\/ @match\s+(\S+)$/gm)].map((m) => m[1]);
   assert.deepEqual(matches, ["*://reddit.com/*", "*://*.reddit.com/*", "*://redd.it/*"]);
   assert.deepEqual([...header.matchAll(/^\/\/ @exclude\s+(\S+)$/gm)].map((m) => m[1]), ["*://embed.reddit.com/*"]);
-  assert.deepEqual([...header.matchAll(/^\/\/ @grant\s+(\S+)$/gm)].map((m) => m[1]).sort(), ["GM.download", "GM.xmlHttpRequest", "GM_download", "GM_xmlhttpRequest"]);
+  assert.deepEqual([...header.matchAll(/^\/\/ @grant\s+(\S+)$/gm)].map((m) => m[1]).sort(), ["GM.xmlHttpRequest", "GM_xmlhttpRequest"]);
   assert.deepEqual([...header.matchAll(/^\/\/ @connect\s+(\S+)$/gm)].map((m) => m[1]).sort(), ["i.redd.it", "nobsdl.com", "preview.redd.it"]);
   assert.deepEqual(IMAGE_HOSTS, ["i.redd.it", "preview.redd.it"]);
   assert.match(header, /^\/\/ @noframes$/m);

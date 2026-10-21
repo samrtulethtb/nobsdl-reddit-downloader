@@ -995,10 +995,34 @@ async function main() {
     await context.close();
   }
 
-  // L4. RedGIFs (behind a blur) and Streamable link posts get a Video badge
-  // from the post's own content-href, and NoBsDL is asked about the EXTERNAL
-  // URL, never the Reddit post URL.
-  for (const kind of ['redgifs', 'streamable']) {
+  // L4r. RedGIFs posts (adult, behind a blur) go to NSFWDL, the adult
+  // downloader (owner 2026-10-21): one "Download on NSFWDL" badge that opens
+  // nsfwdl.com/redgifs-downloader#url=<RedGIFs link> in a new tab, and
+  // nothing is sent to NoBsDL.
+  {
+    const {context, page, calls, errors} = await liveSetup(browser, liveEmbedPost('redgifs'));
+    await page.goto(LIVE_REDGIFS_URL);
+    await inject(page, true);
+    const report = await badgeReport(page);
+    check('redgifs: exactly one badge, "Download on NSFWDL"', report.length === 1 && report[0].text === '⬇ Download on NSFWDL', report);
+    check('redgifs: the badge is a real box inside the media container and topmost', badgesOk(report), report);
+    check('redgifs: the badge says it opens NSFWDL in a new tab',
+      /NSFWDL/.test(await page.locator('.nobsdl-reddit-badge').first().getAttribute('aria-label') || ''));
+    const popup = context.waitForEvent('page', {timeout: 5000}).catch(() => null);
+    await page.locator('.nobsdl-reddit-badge').first().click();
+    const tab = await popup;
+    check('redgifs: a click opens NSFWDL\'s RedGIFs page with the link prefilled',
+      tab && tab.url() === 'https://nsfwdl.com/redgifs-downloader#url=' + encodeURIComponent(REDGIFS_SOURCE), tab && tab.url());
+    check('redgifs: the Reddit tab stays where it is', page.url() === LIVE_REDGIFS_URL, page.url());
+    check('redgifs: nothing goes to NoBsDL', calls.length === 0, calls);
+    check('redgifs: no page errors', errors.length === 0, errors);
+    await context.close();
+  }
+
+  // L4. Streamable link posts get a Video badge from the post's own
+  // content-href, and NoBsDL is asked about the EXTERNAL URL, never the
+  // Reddit post URL.
+  for (const kind of ['streamable']) {
     const source = kind === 'redgifs' ? REDGIFS_SOURCE : STREAMABLE_SOURCE;
     const redditUrl = kind === 'redgifs' ? LIVE_REDGIFS_URL : LIVE_STREAMABLE_URL;
     const api = (route, url) => {
@@ -1116,7 +1140,7 @@ async function main() {
       await page.evaluate(addMedia);
       await page.waitForTimeout(3200);
       const report = await badgeReport(page);
-      check('late media (' + wrapper + '): one Video badge once the media exists', report.length === 1 && report[0].text === '⬇ Download video', report);
+      check('late media (' + wrapper + '): one NSFWDL badge once the media exists', report.length === 1 && report[0].text === '⬇ Download on NSFWDL', report);
       check('late media (' + wrapper + '): the badge is on the media container, inside it and topmost', report[0] && report[0].host === 'div' && badgesOk(report), report);
       check('late media (' + wrapper + '): no page errors', errors.length === 0, errors);
       await context.close();
@@ -1165,52 +1189,38 @@ async function main() {
     await context.close();
   }
 
-  // L7. Video files go through the userscript manager's download function when
-  // there is one (no tab navigation, a sane name); on its error, or when it
-  // does not exist, the browser is pointed at the file instead.
+  // L7. Video files go through the browser's own download handling, like
+  // images (owner 2026-10-21: the browser's "always ask where to save" setting
+  // must apply to videos too). Even when the manager offers GM_download it is
+  // not used; the anchor never reaches Reddit's router; the tab stays put.
   {
-    const polls = [{status: 'ready', filename: '../Evil:Name?.mp4', direct_url: '/api/free-download/file/fixturejob1'}];
+    const polls = [{status: 'ready', filename: 'Fixture Video Post.mp4', direct_url: '/api/free-download/file/fixturejob1'}];
     const rig = await setup(browser, {body: videoPost(), api: videoApi(polls)});
-    await rig.page.addInitScript(() => { window.__gmDownloads = []; window.GM_download = (opts) => { window.__gmDownloads.push({url: opts.url, name: opts.name, saveAs: opts.saveAs}); }; });
+    await rig.page.addInitScript(() => {
+      window.__gmDownloads = 0;
+      window.GM_download = () => { window.__gmDownloads += 1; };
+      window.__routed = [];
+      document.addEventListener('click', (event) => {
+        const anchor = event.target && event.target.closest && event.target.closest('a[href]');
+        if (!anchor || !/free-download/.test(anchor.href)) return;
+        event.preventDefault();
+        window.__routed.push(anchor.href);
+      }, true);
+    });
     await rig.page.goto(VIDEO_URL);
     await inject(rig.page, true);
     await rig.page.locator('.nobsdl-reddit-badge').first().click();
     await shadow(rig.page, '.card').first().waitFor();
-    await shadow(rig.page, '.card:not(.locked)').first().click();
-    await shadow(rig.page, '.result-ok').waitFor();
-    const handed = await rig.page.evaluate(() => window.__gmDownloads);
-    check('video save: the file is handed to GM_download once, with a sanitized server name and no save-as prompt',
-      handed.length === 1 && handed[0].url === NOBSDL + '/api/free-download/file/fixturejob1'
-      && handed[0].name === 'Evil Name.mp4' && handed[0].saveAs === false, handed);
-    check('video save: the Reddit tab is not navigated', rig.page.url() === VIDEO_URL, rig.page.url());
-    check('video save: no page errors', rig.errors.length === 0, rig.errors);
-    await rig.context.close();
-  }
-  {
-    const rig = await setup(browser, {body: videoPost(), api: videoApi([{status: 'ready', direct_url: '/api/free-download/file/fixturejob1'}])});
-    await rig.page.addInitScript(() => { window.__gmDownloads = []; window.GM_download = (opts) => { window.__gmDownloads.push({name: opts.name}); }; });
-    await rig.page.goto(VIDEO_URL);
-    await inject(rig.page, true);
-    await rig.page.locator('.nobsdl-reddit-badge').first().click();
-    await shadow(rig.page, '.card').first().waitFor();
-    await shadow(rig.page, '.card:not(.locked)').first().click();
-    await shadow(rig.page, '.result-ok').waitFor();
-    const handed = await rig.page.evaluate(() => window.__gmDownloads);
-    check('video save: without a server filename the name comes from the post title', handed.length === 1 && handed[0].name === 'Fixture Video Post.mp4', handed);
-    await rig.context.close();
-  }
-  {
-    const rig = await setup(browser, {body: videoPost(), api: videoApi([{status: 'ready', filename: 'Fixture Video Post.mp4', direct_url: '/api/free-download/file/fixturejob1'}])});
-    await rig.page.addInitScript(() => { window.__gmDownloads = 0; window.GM_download = (opts) => { window.__gmDownloads += 1; setTimeout(() => opts.onerror && opts.onerror({error: 'not_succeeded'}), 10); }; });
-    await rig.page.goto(VIDEO_URL);
-    await inject(rig.page, true);
-    await rig.page.locator('.nobsdl-reddit-badge').first().click();
-    await shadow(rig.page, '.card').first().waitFor();
-    const downloadPromise = rig.page.waitForEvent('download');
+    const downloadPromise = rig.page.waitForEvent('download', {timeout: 8000}).catch(() => null);
     await shadow(rig.page, '.card:not(.locked)').first().click();
     const download = await downloadPromise;
-    check('video save: when GM_download fails the previous browser download still happens', download.suggestedFilename() === 'Fixture Video Post.mp4'
-      && (await rig.page.evaluate(() => window.__gmDownloads)) === 1, download.suggestedFilename());
+    check('video save: the browser downloads the file itself (its save settings apply)',
+      download && download.suggestedFilename() === 'Fixture Video Post.mp4', download && download.suggestedFilename());
+    check('video save: GM_download is not used', (await rig.page.evaluate(() => window.__gmDownloads)) === 0);
+    check('video save: the download link never reaches the page router', (await rig.page.evaluate(() => window.__routed.length)) === 0,
+      await rig.page.evaluate(() => window.__routed));
+    check('video save: the Reddit tab is not navigated', rig.page.url() === VIDEO_URL, rig.page.url());
+    check('video save: no page errors', rig.errors.length === 0, rig.errors);
     await rig.context.close();
   }
 
