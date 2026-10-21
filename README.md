@@ -142,6 +142,19 @@ time. Collapsed comments are exported if their element exists. Deleted and
 removed comments are exported as Reddit displays them, with `is_deleted` /
 `is_removed` flags.
 
+## 1.2.1 fixes
+
+Found on live Reddit in Firefox on 2026-10-21, after 1.2.0:
+
+- Saving one image from a gallery closed the panel, and later saves showed
+  "Saved" without downloading anything. Reddit's router caught the click on
+  the hidden download link and changed the page URL to the `blob:` URL. The
+  download link is no longer put in the page. A browser test mimics that router.
+- The panel closes on navigation only when you leave its post. A `blob:` URL,
+  or opening the same post from the feed, no longer closes it.
+- Badges stop pointer, mouse and touch presses as well as clicks, so Reddit's
+  cards and players don't react to a press on a badge.
+
 ## 1.2.0 fixes
 
 Each root cause below was observed on live Reddit (Firefox 140 and Chrome) and

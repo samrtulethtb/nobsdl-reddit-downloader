@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NoBsDL Reddit Media Downloader
 // @namespace    https://nobsdl.com/
-// @version      1.2.0
+// @version      1.2.1
 // @description  Save Reddit images, galleries and comment images straight from the page, download Reddit videos with audio through NoBsDL, and export the comments loaded on a post to JSON, CSV or Markdown. No popups, no fake buttons.
 // @author       NoBsDL
 // @icon         https://nobsdl.com/static/images/icon-192x192.png
@@ -1053,6 +1053,11 @@
     button.style.top = "8px";
     button.style.right = "8px";
     button.style.zIndex = "2147483000";
+    // Reddit's cards and players react to pointer/mouse/touch presses, not
+    // only to clicks; keep every press on the badge to the badge.
+    for (const type of ["pointerdown", "pointerup", "mousedown", "mouseup", "touchstart", "touchend", "auxclick"]) {
+      button.addEventListener(type, (event) => event.stopPropagation());
+    }
     button.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -1211,9 +1216,10 @@
     anchor.style.display = "none";
     anchor.rel = "noopener noreferrer";
     anchor.referrerPolicy = "no-referrer";
-    document.documentElement.append(anchor);
+    // The anchor is never put in the page: Reddit's router handles clicks on
+    // anchors in the document and, in Firefox, turned this download into a
+    // pushState to the blob: URL (panel closed, later downloads were lost).
     anchor.click();
-    anchor.remove();
     setTimeout(() => { try { URL.revokeObjectURL(href); } catch (_) { /* gone */ } }, 60000);
   }
 
@@ -3110,11 +3116,22 @@
     }, wait);
   }
 
+  // A navigation closes the panel only when it really leaves the panel's
+  // post: not for a non-http URL (a blob: download), not when the new page is
+  // that same post (feed card -> its post page).
+  function panelBelongsElsewhere() {
+    if (!/^https?:$/i.test(location.protocol)) return false;
+    const here = parseRedditPostUrl(location.href);
+    const mine = state.context && parseRedditPostUrl(state.context.postUrl);
+    if (here && mine && here.id === mine.id) return false;
+    return true;
+  }
+
   function scan() {
     if (!document.body) return;
     if (location.href !== lastHref) {
       lastHref = location.href;
-      if (state.open && !state.busy) closePanel();
+      if (state.open && !state.busy && panelBelongsElsewhere()) closePanel();
     }
     document.querySelectorAll(GALLERY_SELECTOR).forEach(processGallery);
     document.querySelectorAll("shreddit-post[content-href], [data-testid='post-container'][content-href]").forEach(processEmbedPost);

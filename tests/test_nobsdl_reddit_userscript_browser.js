@@ -882,6 +882,47 @@ async function main() {
     await context.close();
   }
 
+  // L1r. Reddit's router (live bug 2026-10-21, Firefox): a document-level
+  // click handler turned the hidden download anchor into a pushState to the
+  // blob: URL, which closed the panel and lost every later download. Mimic
+  // that router; each row must still download and the panel must stay open.
+  {
+    const media = (route, url) => imageResponse(route);
+    const {context, page, errors} = await liveSetup(browser, liveGalleryPost(3), {media});
+    await page.goto(LIVE_GALLERY_URL);
+    await page.evaluate(() => {
+      window.__routed = [];
+      document.addEventListener('click', (event) => {
+        const anchor = event.target && event.target.closest && event.target.closest('a[href]');
+        if (!anchor) return;
+        event.preventDefault();
+        window.__routed.push(anchor.href);
+        try { history.pushState({}, '', anchor.href); } catch (_) { /* cross-origin */ }
+      }, true);
+    });
+    await inject(page, true);
+    await page.locator('.nobsdl-reddit-badge').first().click();
+    await shadow(page, '.gallery-item').first().waitFor();
+    const downloads = [];
+    page.on('download', (item) => downloads.push(item.suggestedFilename()));
+    const rows = shadow(page, '.gallery-item .btn');
+    for (let i = 0; i < 3; i++) {
+      const next = page.waitForEvent('download', {timeout: 8000}).catch(() => null);
+      await rows.nth(i).click({timeout: 3000}).catch(() => {});
+      await next;
+      await page.waitForTimeout(400);
+    }
+    check('router: every gallery row downloads its own file', JSON.stringify(downloads) === JSON.stringify([
+      'Live Gallery Post - 01.jpg', 'Live Gallery Post - 02.jpg', 'Live Gallery Post - 03.jpg',
+    ]), downloads);
+    check('router: the download anchor never reaches the page router', (await page.evaluate(() => window.__routed.length)) === 0,
+      await page.evaluate(() => window.__routed));
+    check('router: the page URL is unchanged', page.url() === LIVE_GALLERY_URL, page.url());
+    check('router: the panel stays open after the saves', await shadow(page, '.gallery-list').isVisible());
+    check('router: no page errors', errors.length === 0, errors);
+    await context.close();
+  }
+
   // L1b. A gallery with no block container around it, only the inline loader:
   // the badge must land on a visible block host instead.
   {

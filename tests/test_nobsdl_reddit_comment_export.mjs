@@ -138,7 +138,7 @@ function parseCsv(text) {
 
 test("merged metadata announces comment export and keeps the media permissions", () => {
   const header = source.slice(0, source.indexOf("// ==/UserScript=="));
-  assert.match(header, /^\/\/ @version\s+1\.2\.0$/m);
+  assert.match(header, /^\/\/ @version\s+1\.2\.1$/m);
   const description = header.match(/^\/\/ @description\s+(.*)$/m)[1];
   assert.match(description, /comments/i);
   assert.match(description, /JSON, CSV or Markdown/);
