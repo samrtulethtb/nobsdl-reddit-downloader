@@ -138,13 +138,13 @@ function parseCsv(text) {
 
 test("merged metadata announces comment export and keeps the media permissions", () => {
   const header = source.slice(0, source.indexOf("// ==/UserScript=="));
-  assert.match(header, /^\/\/ @version\s+1\.2\.3$/m);
+  assert.match(header, /^\/\/ @version\s+1\.2\.4$/m);
   const description = header.match(/^\/\/ @description\s+(.*)$/m)[1];
   assert.match(description, /comments/i);
   assert.match(description, /JSON, CSV or Markdown/);
   assert.doesNotMatch(description, /\bno ads\b|ad-free/i);
   assert.ok(description.length <= 500);
-  assert.deepEqual([...header.matchAll(/^\/\/ @name\s+(.*)$/gm)].map((m) => m[1]), ["NoBsDL Reddit Media Downloader"]);
+  assert.deepEqual([...header.matchAll(/^\/\/ @name\s+(.*)$/gm)].map((m) => m[1]), ["Reddit Downloader – Videos with Sound, Full-Size Images, Galleries (ZIP), GIFs & Comments"]);
   assert.deepEqual([...header.matchAll(/^\/\/ @namespace\s+(.*)$/gm)].map((m) => m[1]), ["https://nobsdl.com/"]);
   // The comment export adds no grant and no connect host of its own; the
   // only extra grants are the manager download function used for video files.

@@ -141,6 +141,16 @@ time. Collapsed comments are exported if their element exists. Deleted and
 removed comments are exported as Reddit displays them, with `is_deleted` /
 `is_removed` flags.
 
+## 1.2.4 changes
+
+- New name, so the script is easier to find on Greasy Fork: **Reddit
+  Downloader – Videos with Sound, Full-Size Images, Galleries (ZIP), GIFs &
+  Comments**. `@namespace` is unchanged, so existing installs keep updating.
+  The `@description` leads with the same terms.
+- The header comment no longer says videos are saved through the userscript
+  manager's download function (since 1.2.3 the browser saves them).
+- No behaviour change.
+
 ## 1.2.3 changes
 
 - RedGIFs posts get **Download on NSFWDL** instead of the NoBsDL panel (owner

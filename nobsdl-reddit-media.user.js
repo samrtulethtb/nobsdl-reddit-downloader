@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         NoBsDL Reddit Media Downloader
+// @name         Reddit Downloader – Videos with Sound, Full-Size Images, Galleries (ZIP), GIFs & Comments
 // @namespace    https://nobsdl.com/
-// @version      1.2.3
-// @description  Save Reddit images, galleries and comment images straight from the page, download Reddit videos with audio through NoBsDL, and export the comments loaded on a post to JSON, CSV or Markdown. No popups, no fake buttons.
+// @version      1.2.4
+// @description  Download Reddit videos with sound as MP4 or MP3, save full-size images, whole galleries as one ZIP, GIFs and comment images straight from the page, and export the comments loaded on a post to JSON, CSV or Markdown. By NoBsDL. No popups, no fake buttons.
 // @author       NoBsDL
 // @icon         https://nobsdl.com/static/images/icon-192x192.png
 // @homepageURL  https://nobsdl.com/reddit-downloader
@@ -29,8 +29,8 @@
 // - Videos: only when you open the video panel, the canonical Reddit post URL
 //   is sent to https://nobsdl.com/api/video-info to list the real formats.
 //   Choosing a format starts the async job on NoBsDL; the panel polls its
-//   status and finally hands the finished file to the browser (through your
-//   userscript manager's download function when it has one).
+//   status and finally hands the finished file to the browser, which saves it
+//   as a normal download.
 // - Reddit posts that embed a RedGIFs or Streamable video: the validated
 //   RedGIFs/Streamable link of that post (not the Reddit post URL) is sent to
 //   the same endpoint, because that is the URL NoBsDL can list formats for.
