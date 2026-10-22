@@ -464,6 +464,7 @@ async function main() {
     check('gallery: rows are numbered honestly', JSON.stringify(await shadow(page, '.gallery-item .gi-meta strong').allTextContents()) === JSON.stringify(['Image 1 of 3', 'Image 2 of 3', 'Image 3 of 3']));
     check('gallery: Save all is actually offered', (await shadow(page, '.save-all').count()) === 1 && (await shadow(page, '.save-all').textContent()) === 'Save all (.zip)');
     check('gallery: opening the panel sends no NoBsDL request', calls.length === 0 && (await gmRequests(page)).length === 0, calls);
+    check('gallery: no "Open post on NoBsDL" link (the site saves Reddit videos only)', (await shadow(page, '.foot a').count()) === 0);
 
     const downloads = [];
     page.on('download', (item) => downloads.push(item));

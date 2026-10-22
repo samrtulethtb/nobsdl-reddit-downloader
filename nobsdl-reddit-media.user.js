@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Reddit Downloader – Videos with Sound, Full-Size Images, Galleries (ZIP), GIFs & Comments
 // @namespace    https://nobsdl.com/
-// @version      1.2.4
+// @version      1.2.5
 // @description  Download Reddit videos with sound as MP4 or MP3, save full-size images, whole galleries as one ZIP, GIFs and comment images straight from the page, and export the comments loaded on a post to JSON, CSV or Markdown. By NoBsDL. No popups, no fake buttons.
 // @author       NoBsDL
 // @icon         https://nobsdl.com/static/images/icon-192x192.png
@@ -1421,9 +1421,9 @@
       title: context.title || "Reddit gallery",
       sub: items.length + " image" + (items.length === 1 ? "" : "s") + " found in this post",
       body: [list, status, el("div", {class: "row"}, [saveAll])],
+      // No "Open post on NoBsDL" link: the NoBsDL site saves Reddit videos only.
       foot: [
         el("span", {text: "Images come from Reddit's image host; galleries are packed into one ZIP."}),
-        externalLink(openOnNoBsdlUrl(context.postUrl), "Open post on NoBsDL ↗", ""),
       ],
     });
     state.open = true;

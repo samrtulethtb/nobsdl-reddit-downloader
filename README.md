@@ -141,6 +141,13 @@ time. Collapsed comments are exported if their element exists. Deleted and
 removed comments are exported as Reddit displays them, with `is_deleted` /
 `is_removed` flags.
 
+## 1.2.5 changes
+
+- The gallery panel no longer shows "Open post on NoBsDL": the NoBsDL site
+  saves Reddit videos only, so that link led to an error for image posts.
+  The site now answers image, gallery and .gif posts with a link back to
+  this script.
+
 ## 1.2.4 changes
 
 - New name, so the script is easier to find on Greasy Fork: **Reddit
